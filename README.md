@@ -25,7 +25,7 @@ Supported formats: `mp4 mov m4v 3gp jpg jpeg png webp heic heif tif tiff gif`.
 
 ### Replace originals
 
-At the top of Options, **Replace originals** makes CleanMetadata overwrite the file instead of saving a `_clean` copy. It is off by default and asks for confirmation when you turn it on, because the originals cannot be recovered afterwards. To keep it safe, the cleaned file is first written next to the original under a temporary name, checked, and only then swapped in, so a failure never touches the original. If a C2PA marker is still detected in the result, the original is kept and the result is saved as a separate `_clean` copy.
+The **Replace originals** switch on the main screen, above the file list, makes CleanMetadata overwrite the file instead of saving a `_clean` copy. It is off by default and asks for confirmation when you turn it on, because the originals cannot be recovered afterwards. To keep it safe, the cleaned file is first written next to the original under a temporary name, checked, and only then swapped in, so a failure never touches the original. If a C2PA marker is still detected in the result, the original is kept and the result is saved as a separate `_clean` copy.
 
 ### Presets and categories
 

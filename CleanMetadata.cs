@@ -1201,6 +1201,17 @@ class MainWin
 
       <Grid Grid.Row='1' Margin='0,10,0,0'>
         <Grid.RowDefinitions><RowDefinition Height='Auto'/><RowDefinition Height='*'/></Grid.RowDefinitions>
+        <StackPanel Grid.Row='0'>
+        <Border x:Name='ReplaceStrip' Height='50' CornerRadius='12' Background='#0E0E11' BorderBrush='#232329' BorderThickness='1' Margin='0,0,0,10' Padding='16,0,14,0'>
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width='*'/><ColumnDefinition Width='Auto'/></Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment='Center'>
+              <TextBlock Text='Replace originals' FontSize='13' FontWeight='SemiBold' Foreground='#ECECEF'/>
+              <TextBlock x:Name='ReplaceHint' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F' Margin='0,2,0,0' Text='saves a _clean copy next to each file'/>
+            </StackPanel>
+            <ToggleButton x:Name='ReplaceSw' Grid.Column='1' VerticalAlignment='Center' Style='{StaticResource Switch}'/>
+          </Grid>
+        </Border>
         <Grid x:Name='ListBar' Height='32' Margin='2,0,0,4' Opacity='0' IsHitTestVisible='False'>
           <StackPanel Orientation='Horizontal' VerticalAlignment='Center'>
             <Ellipse Width='6' Height='6' Fill='#D4FF4A' Margin='0,0,8,0'/>
@@ -1213,6 +1224,7 @@ class MainWin
             </StackPanel>
           </Button>
         </Grid>
+        </StackPanel>
         <TextBlock x:Name='Empty' Grid.Row='1' Text='your files will show up here' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#4A4A54' HorizontalAlignment='Center' VerticalAlignment='Center' Margin='0,0,0,40'/>
         <ScrollViewer x:Name='Scroll' Grid.Row='1' VerticalScrollBarVisibility='Auto' HorizontalScrollBarVisibility='Disabled' Focusable='False'>
           <StackPanel x:Name='Rows' Margin='0,0,2,0'/>
@@ -1258,9 +1270,6 @@ class MainWin
           </Grid>
           <ScrollViewer Grid.Row='1' VerticalScrollBarVisibility='Auto' HorizontalScrollBarVisibility='Disabled' Focusable='False'>
             <StackPanel Margin='20,4,14,24'>
-              <TextBlock Text='OUTPUT' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F' Margin='0,0,0,12'/>
-              <StackPanel x:Name='OutRows' Margin='0,0,0,10'/>
-
               <TextBlock Text='PRESET' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F'/>
               <Border Height='36' CornerRadius='11' Background='#0B0B0D' BorderBrush='#232329' BorderThickness='1' Margin='0,8,0,22'>
                 <Grid x:Name='Seg' Margin='3'>
@@ -1835,6 +1844,7 @@ class MainWin
     TextBlock tagsHint, tagsNote, cmdText, keepLabel;
     bool drawerOpen, syncing;
     ToggleButton animSw, replaceSw;
+    TextBlock replaceHint;
     PixelStage mainStage;
     FrameworkElement zoneContent, sceneHost;
     TextBlock sceneText;
@@ -1927,7 +1937,7 @@ class MainWin
         }
         keepSw[0].IsChecked = Opts.KeepIcc; keepSw[1].IsChecked = Opts.KeepOri;
         if (animSw != null) animSw.IsChecked = Opts.Anim;
-        if (replaceSw != null) replaceSw.IsChecked = Opts.Replace;
+        if (replaceSw != null) { replaceSw.IsChecked = Opts.Replace; ReplaceHint(); }
         for (int i = 0; i < 2; i++) { keepSw[i].IsEnabled = all; A.To(keepRowEls[i], UIElement.OpacityProperty, all ? 1 : .35, 250); }
         A.To(keepLabel, UIElement.OpacityProperty, all ? 1 : .35, 250);
         if (tagsBox.Text != Opts.TagText) tagsBox.Text = Opts.TagText;
@@ -1994,12 +2004,10 @@ class MainWin
         animSw.Click += delegate { if (syncing) return; Opts.Anim = animSw.IsChecked == true; Opts.Save(); };
         G<Panel>("UiRows").Children.Add(row);
 
-        // replacing originals is destructive, so it asks first
-        var outRow = (FrameworkElement)XamlReader.Parse(OptRowXaml);
-        ((TextBlock)outRow.FindName("T")).Text = "Replace originals";
-        ((TextBlock)outRow.FindName("D")).Text = "overwrite the file instead of saving a _clean copy; cannot be undone";
-        replaceSw = (ToggleButton)outRow.FindName("Sw"); replaceSw.Style = (Style)w.FindResource("Switch");
+        // replacing originals is destructive, so it asks first; the switch sits on the main screen above the list
+        replaceSw = G<ToggleButton>("ReplaceSw"); replaceHint = G<TextBlock>("ReplaceHint");
         replaceSw.IsChecked = Opts.Replace;
+        ReplaceHint();
         replaceSw.Click += delegate
         {
             if (syncing) return;
@@ -2011,9 +2019,14 @@ class MainWin
                 if (!yes) { replaceSw.IsChecked = false; return; }
             }
             Opts.Replace = replaceSw.IsChecked == true; Opts.Save();
+            ReplaceHint();
         };
-        G<Panel>("OutRows").Children.Add(outRow);
     }
+
+    void ReplaceHint()
+    {
+        replaceHint.Foreground = new SolidColorBrush(A.C(Opts.Replace ? "#FFB454" : "#74747F"));
+        replaceHint.Text = Opts.Replace ? "overwrites each original, cannot be undone" : "saves a _clean copy next to each file";    }
 
     void PickInspect()
     {
