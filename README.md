@@ -14,12 +14,20 @@ CleanMetadata is **not** a metadata engine of its own. All the actual work is do
 ## Download and run
 
 1. Download `CleanMetadata.exe` from the [latest release](../../releases/latest).
-2. Run it. Drop files or folders onto the GUI, or press `Ctrl+O` to pick them.
-3. A `name_clean.ext` copy is written next to each original. The original is never modified.
+2. Run it. The window has two drop areas: **Clean** (left) and **Inspect** (right). Drop files or folders on the left to clean them, or press `Ctrl+O` to pick them. Dropping anywhere on the window also works: while you drag, the window splits in two and the half under the cursor lights up.
+3. A `name_clean.ext` copy is written next to each original. By default the original is never modified; see **Replace originals** below if you want it overwritten instead.
+
+Files you add show up in a list with a counter and a **Clear list** button above it.
 
 Supported formats: `mp4 mov m4v 3gp jpg jpeg png webp heic heif tif tiff gif`.
 
 ## Choose what to remove
+
+### Replace originals
+
+At the top of Options, **Replace originals** makes CleanMetadata overwrite the file instead of saving a `_clean` copy. It is off by default and asks for confirmation when you turn it on, because the originals cannot be recovered afterwards. To keep it safe, the cleaned file is first written next to the original under a temporary name, checked, and only then swapped in, so a failure never touches the original. If a C2PA marker is still detected in the result, the original is kept and the result is saved as a separate `_clean` copy.
+
+### Presets and categories
 
 By default everything is stripped. Open **Options** (the sliders icon in the title bar) to be selective:
 
@@ -46,7 +54,7 @@ Heads-up for photos and videos: removing dates writes empty date fields, which i
 
 ## Inspect a file
 
-Click the magnifier on any row, or **Inspect...** in the drop area to pick a file, to see what metadata a file carries before you clean it. ExifTool reads it and the tags are grouped by the same categories as the Options switches (location, device and camera, dates, author and rights, thumbnails, edit history and software, C2PA, other). For a file you have already cleaned, every tag is marked as removed or kept, so you can check the result tag by tag.
+Drop a file on the **Inspect** area (right half), click **Choose file** there, or click the magnifier on any row, to see what metadata a file carries before you clean it. ExifTool reads it and the tags are grouped by the same categories as the Options switches (location, device and camera, dates, author and rights, thumbnails, edit history and software, C2PA, other). For a file you have already cleaned, every tag is marked as removed or kept, so you can check the result tag by tag.
 
 ## Cleaning animation
 
@@ -70,7 +78,7 @@ CleanMetadata does not write to the registry, add startup entries or make networ
 
 The exe is not code-signed and it bundles ExifTool, so some antivirus products may flag it with a generic, heuristic detection. Here is everything it does, so you can judge for yourself:
 
-- It reads the files you give it and writes `_clean` copies next to them. It never modifies or deletes your originals.
+- It reads the files you give it and writes `_clean` copies next to them. By default it never modifies or deletes your originals; only if you turn on **Replace originals** does it overwrite them, after confirmation.
 - On first run it unpacks the bundled ExifTool into `%LOCALAPPDATA%\CleanMetadata` and runs it as a hidden child process (no console window). This "unpack and run" step is the most likely reason for a heuristic flag.
 - It keeps a small `settings.ini` in that same folder and writes short-lived temp files with ExifTool's arguments.
 - It does not use the network, write to the registry, add startup entries or services, ask for elevated privileges, inject into other processes, or delete itself.

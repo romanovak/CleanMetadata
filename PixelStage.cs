@@ -66,7 +66,7 @@ class PixelStage : Canvas
 
     public PixelStage()
     {
-        Width = 240; Height = 132;
+        Width = 224; Height = 132;
         ClipToBounds = true; IsHitTestVisible = false; Opacity = 0;
         SnapsToDevicePixels = true;
         foreach (var im in new[] { doc, clean, brush, lupa }) RenderOptions.SetBitmapScalingMode(im, BitmapScalingMode.NearestNeighbor);

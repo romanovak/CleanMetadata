@@ -101,12 +101,12 @@ try {
     SetPreset 'all'; Check ($optsT.GetMethod('WantsC2pa').Invoke($null, @())) 'all: C2PA check requested'
 
     # persistence round trip
-    SetPreset 'custom'; foreach ($o in $items) { $o.On = $false }; SetOn 'dates' $true; SetOn 'c2pa' $true; SetField 'TagText' 'Software'
+    SetPreset 'custom'; foreach ($o in $items) { $o.On = $false }; SetOn 'dates' $true; SetOn 'c2pa' $true; SetField 'TagText' 'Software'; SetField 'Replace' $true
     $optsT.GetMethod('Save').Invoke($null, @()) | Out-Null
-    SetPreset 'all'; SetField 'TagText' ''
+    SetPreset 'all'; SetField 'TagText' ''; SetField 'Replace' $false
     $optsT.GetMethod('Load').Invoke($null, @()) | Out-Null
     $on = ($items | Where-Object { $_.On } | ForEach-Object { $_.Key }) -join ','
-    Check (($optsT.GetField('Preset').GetValue($null) -eq 'custom') -and ($on -eq 'dates,c2pa') -and ($optsT.GetField('TagText').GetValue($null) -eq 'Software')) 'settings survive a save and load'
+    Check (($optsT.GetField('Preset').GetValue($null) -eq 'custom') -and ($on -eq 'dates,c2pa') -and ($optsT.GetField('TagText').GetValue($null) -eq 'Software') -and ($optsT.GetField('Replace').GetValue($null) -eq $true)) 'settings survive a save and load (including Replace originals)'
 }
 finally {
     if ($null -ne $iniBackup) { [IO.File]::WriteAllBytes($ini, $iniBackup) } elseif (Test-Path $ini) { Remove-Item -LiteralPath $ini -Force }

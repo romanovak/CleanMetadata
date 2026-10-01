@@ -1,6 +1,7 @@
 # End-to-end smoke test: launches the built exe on JPEGs with EXIF/GPS data and a non-ANSI file name, then checks
 #  1. default preset (all metadata): the _clean copy lost the metadata, kept its orientation, the original is untouched
 #  2. "privacy" preset read from settings.ini: personal data is gone but the editing software tag is left alone
+#  3. "replace originals" (settings.ini): the original file itself is cleaned, no _clean copy and no temp file is left behind
 #   .\tests\smoke.ps1 -ExifDir C:\path\to\exiftool-13.59_64 [-Exe .\dist\CleanMetadata.exe]
 param(
     [Parameter(Mandatory = $true)][string]$ExifDir,
@@ -76,6 +77,21 @@ try {
         Check (((Tag $out2 '-Artist') -eq '') -and ((Tag $out2 '-GPSLatitude') -eq '')) 'privacy preset: author and location are gone'
         Check ((Tag $out2 '-Software') -eq 'EditorX') 'privacy preset: editing software tag was left alone'
     }
+
+    # ---- 3. replace originals ----
+    Set-Content -Path $ini -Value @('preset=all', 'keepIcc=1', 'keepOri=1', 'tags=', 'replace=1') -Encoding ASCII
+    $src3 = NewFixture 'replace test.jpg'
+    $p3 = Start-Process $Exe -ArgumentList ('"' + $src3 + '"') -PassThru
+    $deadline = (Get-Date).AddSeconds(45); $artist = 'SmokeTest'
+    while ($artist -ne '' -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 800; try { $artist = Tag $src3 '-Artist' } catch { $artist = 'SmokeTest' } }
+    Start-Sleep -Seconds 1
+    Stop-Process $p3 -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 700
+    Check ($artist -eq '') 'replace originals: the original file itself was cleaned'
+    Check ((Tag $src3 '-GPSLatitude') -eq '') 'replace originals: GPS is gone from the original'
+    Check ((Tag $src3 '-Orientation#') -eq '6') 'replace originals: orientation was preserved'
+    Check (-not (Test-Path -LiteralPath (Join-Path $dir 'replace test_clean.jpg'))) 'replace originals: no _clean copy was created'
+    Check (@(Get-ChildItem -LiteralPath $dir -Filter '*.cm-*').Count -eq 0) 'replace originals: no temporary file was left behind'
 }
 finally {
     Get-Process CleanMetadata -ErrorAction SilentlyContinue | Stop-Process -Force

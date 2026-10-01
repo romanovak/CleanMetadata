@@ -117,6 +117,8 @@ class Job
     public RowView Row;
     public List<string> Args;   // ExifTool arguments, snapshotted when the file is added
     public bool CheckC2pa;
+    public bool Replace;        // overwrite the original instead of writing a _clean copy (snapshotted when the file is added)
+    public bool Replaced;       // the original was actually replaced
 }
 
 // ---------- options ----------
@@ -157,6 +159,7 @@ static class Opts
     public static string Preset = "all"; // all | privacy | provenance | custom
     public static bool KeepIcc = true, KeepOri = true;
     public static bool Anim = true; // play the cleaning animation (adds about a second per run)
+    public static bool Replace;      // overwrite the original instead of writing a _clean copy
     public static string TagText = "";
 
     static Opts() { Apply("all"); } // defaults: everything on
@@ -178,7 +181,7 @@ static class Opts
                 || (preset == "provenance" && Array.IndexOf(ProvenanceKeys, o.Key) >= 0);
     }
 
-    public static void Reset() { Apply("all"); KeepIcc = true; KeepOri = true; Anim = true; TagText = ""; }
+    public static void Reset() { Apply("all"); KeepIcc = true; KeepOri = true; Anim = true; Replace = false; TagText = ""; }
 
     // tag names the user typed; anything that isn't a plain ExifTool tag name is reported back instead of being passed on
     public static List<string> Tags(out List<string> rejected)
@@ -236,6 +239,7 @@ static class Opts
             if (kv.TryGetValue("keepIcc", out v)) KeepIcc = v == "1";
             if (kv.TryGetValue("keepOri", out v)) KeepOri = v == "1";
             if (kv.TryGetValue("anim", out v)) Anim = v != "0";
+            if (kv.TryGetValue("replace", out v)) Replace = v == "1";
             if (kv.TryGetValue("tags", out v)) TagText = v;
             Apply(Preset);
             if (Preset == "custom") foreach (var o in Items) if (kv.TryGetValue("opt." + o.Key, out v)) o.On = v == "1";
@@ -249,7 +253,7 @@ static class Opts
         {
             string p = FilePath();
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(p));
-            var lines = new List<string> { "preset=" + Preset, "keepIcc=" + (KeepIcc ? "1" : "0"), "keepOri=" + (KeepOri ? "1" : "0"), "anim=" + (Anim ? "1" : "0"), "tags=" + TagText.Replace("\r", " ").Replace("\n", " ") };
+            var lines = new List<string> { "preset=" + Preset, "keepIcc=" + (KeepIcc ? "1" : "0"), "keepOri=" + (KeepOri ? "1" : "0"), "anim=" + (Anim ? "1" : "0"), "replace=" + (Replace ? "1" : "0"), "tags=" + TagText.Replace("\r", " ").Replace("\n", " ") };
             foreach (var o in Items) lines.Add("opt." + o.Key + "=" + (o.On ? "1" : "0"));
             File.WriteAllLines(p, lines.ToArray());
         }
@@ -296,13 +300,17 @@ static class Cleaner
         if (exiftool == null) { Fail(j, "Could not set up exiftool"); return; }
 
         string f = j.Src;
-        j.Out = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(f),
-            System.IO.Path.GetFileNameWithoutExtension(f) + "_clean" + System.IO.Path.GetExtension(f));
-        if (File.Exists(j.Out)) File.Delete(j.Out);
+        string dir = System.IO.Path.GetDirectoryName(f), stem = System.IO.Path.GetFileNameWithoutExtension(f), ext = System.IO.Path.GetExtension(f);
+        string cleanName = System.IO.Path.Combine(dir, stem + "_clean" + ext);
+        // When replacing, the cleaned file is written next to the original under a temporary name (same folder, same
+        // extension) and only swapped in after it has been verified, so a failure never touches the original.
+        string work = j.Replace ? System.IO.Path.Combine(dir, stem + ".cm-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ext) : cleanName;
+        j.Out = cleanName;
+        if (!j.Replace && File.Exists(cleanName)) File.Delete(cleanName);
 
         if (j.Args == null || j.Args.Count == 0) { Fail(j, "Nothing selected in Options"); return; }
         var a = new List<string>(j.Args);
-        a.AddRange(new[] { "-o", j.Out, f });
+        a.AddRange(new[] { "-o", work, f });
 
         // Arguments go through a UTF-8 argument file: plain command-line arguments break on file names with
         // characters outside the ANSI code page (CJK, emoji, ...).
@@ -334,9 +342,9 @@ static class Cleaner
         }
         finally { try { File.Delete(argFile); } catch (Exception) { } }
 
-        if (Cancelled || code != 0 || !File.Exists(j.Out))
+        if (Cancelled || code != 0 || !File.Exists(work))
         {
-            DeleteQuiet(j.Out);
+            DeleteQuiet(work);
             Fail(j, Cancelled ? "Cancelled" : ShortErr(msg.ToString()));
             return;
         }
@@ -344,7 +352,7 @@ static class Cleaner
         // the C2PA manifest sits at the start of the file (at the end in some mp4s); check both ends
         var latin = Encoding.GetEncoding("iso-8859-1");
         string head, tail;
-        using (var fs = File.OpenRead(j.Out))
+        using (var fs = File.OpenRead(work))
         {
             byte[] b = new byte[4 * 1024 * 1024];
             int n = fs.Read(b, 0, b.Length);
@@ -358,6 +366,24 @@ static class Cleaner
         if (j.CheckC2pa && (both.Contains("c2pa") || both.Contains("jumb") || both.Contains("trainedAlgorithmicMedia")))
         { j.State = State.Warn; j.Note = "C2PA still detected in the copy"; }
         else j.State = State.Done;
+
+        if (!j.Replace) return;
+        try
+        {
+            if (j.State == State.Done) { File.Replace(work, f, null); j.Out = f; j.Replaced = true; }
+            else
+            {
+                // a marker is still there: keep the original untouched and save the result as a separate copy
+                if (File.Exists(cleanName)) File.Delete(cleanName);
+                File.Move(work, cleanName);
+                j.Note = "C2PA still detected, original kept, copy saved as _clean";
+            }
+        }
+        catch (Exception ex)
+        {
+            DeleteQuiet(work);
+            Fail(j, "Could not replace the original: " + ex.Message.Split('\n')[0].Trim());
+        }
     }
 }
 // ---------- animation ----------
@@ -602,7 +628,7 @@ class RowView
                 A.To(iCheck, Shape.StrokeDashOffsetProperty, 0, 550, A.Out, 50, 7, null);
                 Status("Clean", "#3DDC97");
                 A.Tint(bb, A.C("#99D4FF4A"), hover ? Line2 : Line, 800);
-                A.Swap(sub, subT, "→ " + System.IO.Path.GetFileName(job.Out) + "  ·  " + Size(job.Out));
+                A.Swap(sub, subT, (job.Replaced ? "original replaced" : "→ " + System.IO.Path.GetFileName(job.Out)) + "  ·  " + Size(job.Out));
                 ShowOpen();
                 break;
 
@@ -999,7 +1025,7 @@ class MainWin
     <!-- header -->
     <Border Grid.Row='0' Background='#D9121215' BorderBrush='#232329' BorderThickness='0,0,0,1'>
       <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition Width='Auto'/><ColumnDefinition Width='*'/><ColumnDefinition Width='Auto'/><ColumnDefinition Width='Auto'/><ColumnDefinition Width='Auto'/><ColumnDefinition Width='Auto'/><ColumnDefinition Width='Auto'/></Grid.ColumnDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition Width='Auto'/><ColumnDefinition Width='*'/><ColumnDefinition Width='Auto'/><ColumnDefinition Width='Auto'/><ColumnDefinition Width='Auto'/></Grid.ColumnDefinitions>
         <StackPanel Orientation='Horizontal' VerticalAlignment='Center' Margin='12,0,0,0'>
           <Grid Width='26' Height='26' x:Name='LogoHost'>
             <Border x:Name='LogoRing' CornerRadius='9' BorderBrush='#D4FF4A' BorderThickness='1' Margin='-3' Opacity='0' RenderTransformOrigin='.5,.5'>
@@ -1012,21 +1038,10 @@ class MainWin
           <TextBlock Text='Clean Metadata' FontWeight='SemiBold' Margin='9,0,0,0' VerticalAlignment='Center'/>
         </StackPanel>
 
-        <Border x:Name='Pill' Grid.Column='2' Height='24' CornerRadius='12' BorderThickness='1' Padding='9,0,10,0' Margin='0,0,6,0' VerticalAlignment='Center' RenderTransformOrigin='.5,.5'>
-          <Border.BorderBrush><SolidColorBrush x:Name='PillBb' Color='#2E2E36'/></Border.BorderBrush>
-          <Border.RenderTransform><ScaleTransform x:Name='PillSc'/></Border.RenderTransform>
-          <StackPanel Orientation='Horizontal' VerticalAlignment='Center'>
-            <Ellipse x:Name='PillLed' Width='6' Height='6' Margin='0,0,7,0'><Ellipse.Fill><SolidColorBrush x:Name='PillLedB' Color='#3C3C46'/></Ellipse.Fill></Ellipse>
-            <TextBlock x:Name='PillText' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#A9A9B3' Text='no files'/>
-          </StackPanel>
-        </Border>
-        <Button x:Name='ClearBtn' Grid.Column='3' Style='{StaticResource Ico}' shell:WindowChrome.IsHitTestVisibleInChrome='True' Opacity='0' IsHitTestVisible='False' ToolTip='Clear list' Margin='0,0,6,0'>
-          <Path Data='{StaticResource GTrash}' Stroke='#A9A9B3' StrokeThickness='1.6' StrokeLineJoin='Round' StrokeStartLineCap='Round' StrokeEndLineCap='Round' Width='14' Height='14' Stretch='Uniform'/>
-        </Button>
-        <Button x:Name='OptBtn' Grid.Column='4' Style='{StaticResource Ico}' shell:WindowChrome.IsHitTestVisibleInChrome='True' ToolTip='Options' Margin='0,0,2,0'>
+        <Button x:Name='OptBtn' Grid.Column='2' Style='{StaticResource Ico}' shell:WindowChrome.IsHitTestVisibleInChrome='True' ToolTip='Options' Margin='0,0,2,0'>
           <Path Data='{StaticResource GSliders}' Stroke='#A9A9B3' StrokeThickness='1.6' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Width='15' Height='15' Stretch='Uniform'/>
         </Button>
-        <Button x:Name='MenuBtn' Grid.Column='5' Style='{StaticResource Ico}' shell:WindowChrome.IsHitTestVisibleInChrome='True' ToolTip='Menu' Margin='0,0,6,0'>
+        <Button x:Name='MenuBtn' Grid.Column='3' Style='{StaticResource Ico}' shell:WindowChrome.IsHitTestVisibleInChrome='True' ToolTip='Menu' Margin='0,0,6,0'>
           <Path Data='M5,12 L5.01,12 M12,12 L12.01,12 M19,12 L19.01,12' Stroke='#A9A9B3' StrokeThickness='2.6' StrokeStartLineCap='Round' StrokeEndLineCap='Round' Width='14' Height='14' Stretch='Uniform'/>
         </Button>
         <Popup x:Name='MenuPop' Placement='Bottom' StaysOpen='False' AllowsTransparency='True' HorizontalOffset='-176' VerticalOffset='2'>
@@ -1039,7 +1054,7 @@ class MainWin
               <Button x:Name='UninstallItem' Style='{StaticResource MenuItem}' Content='Uninstall...' Foreground='#FF5F56'/>
             </StackPanel>
           </Border>
-        </Popup>        <StackPanel Grid.Column='6' Orientation='Horizontal'>
+        </Popup>        <StackPanel Grid.Column='4' Orientation='Horizontal'>
           <Button x:Name='MinBtn' Style='{StaticResource Cap}' shell:WindowChrome.IsHitTestVisibleInChrome='True'>
             <Path Data='M0,5 H10' Stroke='{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}' StrokeThickness='1' Width='10' Height='10'/>
           </Button>
@@ -1054,51 +1069,83 @@ class MainWin
     <Grid Grid.Row='1' Margin='14,12,14,8'>
       <Grid.RowDefinitions><RowDefinition Height='Auto'/><RowDefinition Height='*'/></Grid.RowDefinitions>
 
-      <Border x:Name='Zone' Height='190' CornerRadius='16' BorderThickness='1' Background='#A6121215' Cursor='Hand' Opacity='0'>
-        <Border.BorderBrush><SolidColorBrush x:Name='ZoneBb' Color='#2E2E36'/></Border.BorderBrush>
-        <Grid>
-          <Border x:Name='ZoneSweep' CornerRadius='16' BorderThickness='1.5' Opacity='0' IsHitTestVisible='False' Margin='-1'>
-            <Border.BorderBrush>
-              <LinearGradientBrush StartPoint='0,0' EndPoint='1,1'>
-                <LinearGradientBrush.RelativeTransform><RotateTransform x:Name='SweepRot' CenterX='.5' CenterY='.5'/></LinearGradientBrush.RelativeTransform>
-                <GradientStop Color='#00D4FF4A' Offset='0'/><GradientStop Color='#00D4FF4A' Offset='.45'/><GradientStop Color='#D4FF4A' Offset='.72'/><GradientStop Color='#6FF3FF' Offset='.88'/><GradientStop Color='#006FF3FF' Offset='1'/>
-              </LinearGradientBrush>
-            </Border.BorderBrush>
-          </Border>
-          <StackPanel x:Name='ZoneContent' VerticalAlignment='Center' HorizontalAlignment='Center'>
+      <Grid Height='190'>
+        <Grid.ColumnDefinitions><ColumnDefinition Width='*'/><ColumnDefinition Width='*'/></Grid.ColumnDefinitions>
+
+        <Border x:Name='Zone' Margin='0,0,5,0' CornerRadius='16' BorderThickness='1' Background='#A6121215' Cursor='Hand' Opacity='0'>
+          <Border.BorderBrush><SolidColorBrush x:Name='ZoneBb' Color='#2E2E36'/></Border.BorderBrush>
+          <Grid>
+            <Border x:Name='ZoneSweep' CornerRadius='16' BorderThickness='1.5' Opacity='0' IsHitTestVisible='False' Margin='-1'>
+              <Border.BorderBrush>
+                <LinearGradientBrush StartPoint='0,0' EndPoint='1,1'>
+                  <LinearGradientBrush.RelativeTransform><RotateTransform x:Name='SweepRot' CenterX='.5' CenterY='.5'/></LinearGradientBrush.RelativeTransform>
+                  <GradientStop Color='#00D4FF4A' Offset='0'/><GradientStop Color='#00D4FF4A' Offset='.45'/><GradientStop Color='#D4FF4A' Offset='.72'/><GradientStop Color='#6FF3FF' Offset='.88'/><GradientStop Color='#006FF3FF' Offset='1'/>
+                </LinearGradientBrush>
+              </Border.BorderBrush>
+            </Border>
+            <StackPanel x:Name='ZoneContent' VerticalAlignment='Center' HorizontalAlignment='Center'>
+              <Grid Width='58' Height='58' HorizontalAlignment='Center' Margin='0,0,0,12'>
+                <Rectangle Width='58' Height='58' RadiusX='19' RadiusY='19' Stroke='#4DD4FF4A' StrokeThickness='1' StrokeDashArray='3 3' RenderTransformOrigin='.5,.5'>
+                  <Rectangle.RenderTransform><RotateTransform x:Name='DashRot'/></Rectangle.RenderTransform>
+                </Rectangle>
+                <Border Width='42' Height='42' CornerRadius='13' Background='#1FD4FF4A'>
+                  <Path Data='{StaticResource GArrow}' Stroke='{StaticResource Grad}' StrokeThickness='1.8' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Width='20' Height='20' Stretch='Uniform'>
+                    <Path.RenderTransform><TranslateTransform x:Name='ArrowT'/></Path.RenderTransform>
+                  </Path>
+                </Border>
+              </Grid>
+              <TextBlock Text='Clean' FontSize='17' FontWeight='SemiBold' HorizontalAlignment='Center'/>
+              <TextBlock Text='drop files or folders' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#8A8A95' HorizontalAlignment='Center' Margin='0,3,0,14'/>
+              <Button x:Name='PickBtn' Style='{StaticResource Pill}' Content='Choose files' HorizontalAlignment='Center'/>
+            </StackPanel>
+            <Grid x:Name='SceneHost' Opacity='0' IsHitTestVisible='False' VerticalAlignment='Center' HorizontalAlignment='Center'>
+              <StackPanel>
+                <ContentControl x:Name='StageHost' Width='224' Height='132' HorizontalAlignment='Center'/>
+                <TextBlock x:Name='SceneText' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#A9A9B3' HorizontalAlignment='Center' Margin='0,-2,0,0'/>
+              </StackPanel>
+            </Grid>
+          </Grid>
+        </Border>
+
+        <Border x:Name='InspectZone' Grid.Column='1' Margin='5,0,0,0' CornerRadius='16' BorderThickness='1' Background='#A6121215' Cursor='Hand' Opacity='0'>
+          <Border.BorderBrush><SolidColorBrush x:Name='InspectBb' Color='#2E2E36'/></Border.BorderBrush>
+          <StackPanel VerticalAlignment='Center' HorizontalAlignment='Center'>
             <Grid Width='58' Height='58' HorizontalAlignment='Center' Margin='0,0,0,12'>
-              <Rectangle Width='58' Height='58' RadiusX='19' RadiusY='19' Stroke='#4DD4FF4A' StrokeThickness='1' StrokeDashArray='3 3' RenderTransformOrigin='.5,.5'>
-                <Rectangle.RenderTransform><RotateTransform x:Name='DashRot'/></Rectangle.RenderTransform>
+              <Rectangle Width='58' Height='58' RadiusX='19' RadiusY='19' Stroke='#4D6FF3FF' StrokeThickness='1' StrokeDashArray='3 3' RenderTransformOrigin='.5,.5'>
+                <Rectangle.RenderTransform><RotateTransform x:Name='InspectDashRot'/></Rectangle.RenderTransform>
               </Rectangle>
-              <Border Width='42' Height='42' CornerRadius='13' Background='#1FD4FF4A'>
-                <Path Data='{StaticResource GArrow}' Stroke='{StaticResource Grad}' StrokeThickness='1.8' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Width='20' Height='20' Stretch='Uniform'>
-                  <Path.RenderTransform><TranslateTransform x:Name='ArrowT'/></Path.RenderTransform>
+              <Border Width='42' Height='42' CornerRadius='13' Background='#1F6FF3FF'>
+                <Path Data='M10.5,4 A6.5,6.5 0 1 0 10.5,17 A6.5,6.5 0 1 0 10.5,4 Z M15.5,15.5 L20,20' Stroke='{StaticResource Grad}' StrokeThickness='1.8' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Width='20' Height='20' Stretch='Uniform'>
+                  <Path.RenderTransform><TranslateTransform x:Name='LensT'/></Path.RenderTransform>
                 </Path>
               </Border>
             </Grid>
-            <TextBlock Text='Drop your files here' FontSize='17' FontWeight='SemiBold' HorizontalAlignment='Center'/>
-            <TextBlock Text='mp4 · mov · jpg · png · webp · heic' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#8A8A95' HorizontalAlignment='Center' Margin='0,3,0,14'/>
-            <StackPanel Orientation='Horizontal' HorizontalAlignment='Center'>
-              <Button x:Name='PickBtn' Style='{StaticResource Pill}' Content='Choose files'/>
-              <Button x:Name='InspectBtn' Style='{StaticResource Btn}' Content='Inspect...' Margin='8,0,0,0'/>
-            </StackPanel>
+            <TextBlock Text='Inspect' FontSize='17' FontWeight='SemiBold' HorizontalAlignment='Center'/>
+            <TextBlock Text='drop a file to inspect' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#8A8A95' HorizontalAlignment='Center' Margin='0,3,0,14'/>
+            <Button x:Name='InspectPick' Style='{StaticResource Btn}' Content='Choose file' HorizontalAlignment='Center'/>
           </StackPanel>
-          <Grid x:Name='SceneHost' Opacity='0' IsHitTestVisible='False' VerticalAlignment='Center' HorizontalAlignment='Center'>
-            <StackPanel>
-              <ContentControl x:Name='StageHost' Width='240' Height='132' HorizontalAlignment='Center'/>
-              <TextBlock x:Name='SceneText' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#A9A9B3' HorizontalAlignment='Center' Margin='0,-2,0,0'/>
-            </StackPanel>
-          </Grid>
-        </Grid>
-      </Border>
+        </Border>
+      </Grid>
 
-      <Grid Grid.Row='1' Margin='0,12,0,0'>
-        <TextBlock x:Name='Empty' Text='your files will show up here' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#4A4A54' HorizontalAlignment='Center' VerticalAlignment='Center' Margin='0,0,0,40'/>
-        <ScrollViewer x:Name='Scroll' VerticalScrollBarVisibility='Auto' HorizontalScrollBarVisibility='Disabled' Focusable='False'>
+      <Grid Grid.Row='1' Margin='0,10,0,0'>
+        <Grid.RowDefinitions><RowDefinition Height='Auto'/><RowDefinition Height='*'/></Grid.RowDefinitions>
+        <Grid x:Name='ListBar' Height='32' Margin='2,0,0,4' Opacity='0' IsHitTestVisible='False'>
+          <StackPanel Orientation='Horizontal' VerticalAlignment='Center'>
+            <Ellipse Width='6' Height='6' Fill='#D4FF4A' Margin='0,0,8,0'/>
+            <TextBlock x:Name='ListCount' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#A9A9B3' Text='0 files'/>
+          </StackPanel>
+          <Button x:Name='ClearBtn' Style='{StaticResource Btn}' Height='26' FontSize='11.5' HorizontalAlignment='Right' ToolTip='Remove all files from the list'>
+            <StackPanel Orientation='Horizontal'>
+              <Path Data='{StaticResource GTrash}' Stroke='#A9A9B3' StrokeThickness='1.7' StrokeLineJoin='Round' StrokeStartLineCap='Round' StrokeEndLineCap='Round' Width='12' Height='12' Stretch='Uniform' Margin='0,0,7,0'/>
+              <TextBlock Text='Clear list'/>
+            </StackPanel>
+          </Button>
+        </Grid>
+        <TextBlock x:Name='Empty' Grid.Row='1' Text='your files will show up here' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#4A4A54' HorizontalAlignment='Center' VerticalAlignment='Center' Margin='0,0,0,40'/>
+        <ScrollViewer x:Name='Scroll' Grid.Row='1' VerticalScrollBarVisibility='Auto' HorizontalScrollBarVisibility='Disabled' Focusable='False'>
           <StackPanel x:Name='Rows' Margin='0,0,2,0'/>
         </ScrollViewer>
-      </Grid>
-    </Grid>
+      </Grid>    </Grid>
 
     <!-- footer -->
     <Border Grid.Row='2' Background='#D9121215' BorderBrush='#232329' BorderThickness='0,1,0,0'>
@@ -1139,6 +1186,9 @@ class MainWin
           </Grid>
           <ScrollViewer Grid.Row='1' VerticalScrollBarVisibility='Auto' HorizontalScrollBarVisibility='Disabled' Focusable='False'>
             <StackPanel Margin='20,4,14,24'>
+              <TextBlock Text='OUTPUT' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F' Margin='0,0,0,12'/>
+              <StackPanel x:Name='OutRows' Margin='0,0,0,10'/>
+
               <TextBlock Text='PRESET' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F'/>
               <Border Height='36' CornerRadius='11' Background='#0B0B0D' BorderBrush='#232329' BorderThickness='1' Margin='0,8,0,22'>
                 <Grid x:Name='Seg' Margin='3'>
@@ -1189,25 +1239,41 @@ class MainWin
       </StackPanel>
     </Border>
 
-    <!-- drag overlay: marching ants -->
+    <!-- drag overlay: two halves, the one under the cursor lights up -->
     <Grid x:Name='Overlay' Grid.RowSpan='3' IsHitTestVisible='False' Opacity='0'>
-      <Grid.Background><SolidColorBrush Color='#EB0B0B0D'/></Grid.Background>
-      <Ellipse Width='420' Height='420' IsHitTestVisible='False'>
-        <Ellipse.Fill><RadialGradientBrush><GradientStop Color='#2ED4FF4A' Offset='0'/><GradientStop Color='#00D4FF4A' Offset='1'/></RadialGradientBrush></Ellipse.Fill>
-      </Ellipse>
-      <Rectangle x:Name='Ants' Margin='10' RadiusX='16' RadiusY='16' StrokeThickness='1.5' StrokeDashArray='5 4.5' Stroke='{StaticResource Grad}'/>
-      <StackPanel VerticalAlignment='Center' HorizontalAlignment='Center' RenderTransformOrigin='.5,.5'>
-        <StackPanel.RenderTransform><ScaleTransform x:Name='OvSc' ScaleX='.94' ScaleY='.94'/></StackPanel.RenderTransform>
-        <Border Width='64' Height='64' CornerRadius='20' Background='#26D4FF4A' HorizontalAlignment='Center' Margin='0,0,0,16'>
-          <Path Data='{StaticResource GArrow}' Stroke='{StaticResource Grad}' StrokeThickness='1.8' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Width='30' Height='30' Stretch='Uniform'>
-            <Path.RenderTransform><TranslateTransform x:Name='OvArrowT'/></Path.RenderTransform>
-          </Path>
-        </Border>
-        <TextBlock Text='Drop to clean' FontSize='20' FontWeight='SemiBold' HorizontalAlignment='Center'/>
-        <TextBlock Text='a _clean copy is created, the original is never touched' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#A9A9B3' HorizontalAlignment='Center' Margin='0,5,0,0'/>
-      </StackPanel>
-    </Grid>
-  </Grid>
+      <Grid.Background><SolidColorBrush Color='#F20B0B0D'/></Grid.Background>
+      <Grid Margin='12'>
+        <Grid.ColumnDefinitions><ColumnDefinition Width='*'/><ColumnDefinition Width='*'/></Grid.ColumnDefinitions>
+        <Grid x:Name='OvClean' Margin='0,0,6,0' RenderTransformOrigin='.5,.5'>
+          <Grid.RenderTransform><ScaleTransform x:Name='OvCleanSc'/></Grid.RenderTransform>
+          <Border CornerRadius='16' Background='#14D4FF4A'/>
+          <Rectangle x:Name='AntsClean' RadiusX='16' RadiusY='16' StrokeThickness='1.5' StrokeDashArray='5 4.5' Stroke='#D4FF4A'/>
+          <StackPanel VerticalAlignment='Center' HorizontalAlignment='Center'>
+            <Border Width='64' Height='64' CornerRadius='20' Background='#26D4FF4A' HorizontalAlignment='Center' Margin='0,0,0,16'>
+              <Path Data='{StaticResource GArrow}' Stroke='#D4FF4A' StrokeThickness='1.8' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Width='30' Height='30' Stretch='Uniform'>
+                <Path.RenderTransform><TranslateTransform x:Name='OvArrowT'/></Path.RenderTransform>
+              </Path>
+            </Border>
+            <TextBlock Text='Drop to clean' FontSize='20' FontWeight='SemiBold' HorizontalAlignment='Center'/>
+            <TextBlock x:Name='OvCleanHint' Text='a _clean copy is created' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#A9A9B3' HorizontalAlignment='Center' Margin='0,5,0,0'/>
+          </StackPanel>
+        </Grid>
+        <Grid x:Name='OvInspect' Grid.Column='1' Margin='6,0,0,0' RenderTransformOrigin='.5,.5'>
+          <Grid.RenderTransform><ScaleTransform x:Name='OvInspectSc'/></Grid.RenderTransform>
+          <Border CornerRadius='16' Background='#146FF3FF'/>
+          <Rectangle x:Name='AntsInspect' RadiusX='16' RadiusY='16' StrokeThickness='1.5' StrokeDashArray='5 4.5' Stroke='#6FF3FF'/>
+          <StackPanel VerticalAlignment='Center' HorizontalAlignment='Center'>
+            <Border Width='64' Height='64' CornerRadius='20' Background='#266FF3FF' HorizontalAlignment='Center' Margin='0,0,0,16'>
+              <Path Data='M10.5,4 A6.5,6.5 0 1 0 10.5,17 A6.5,6.5 0 1 0 10.5,4 Z M15.5,15.5 L20,20' Stroke='#6FF3FF' StrokeThickness='1.8' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Width='30' Height='30' Stretch='Uniform'>
+                <Path.RenderTransform><TranslateTransform x:Name='OvLensT'/></Path.RenderTransform>
+              </Path>
+            </Border>
+            <TextBlock Text='Drop to inspect' FontSize='20' FontWeight='SemiBold' HorizontalAlignment='Center'/>
+            <TextBlock Text='see what a file carries' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#A9A9B3' HorizontalAlignment='Center' Margin='0,5,0,0'/>
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </Grid>  </Grid>
 </Window>";
 
     readonly Window w;
@@ -1222,19 +1288,19 @@ class MainWin
     }
 
     readonly Panel rows;
-    readonly UIElement empty, overlay, toast, clearBtn, zone, spotRect;
-    readonly TextBlock pillText, statusText, toastTx;
-    readonly SolidColorBrush pillBb, pillLedB, ledB, zoneBb;
+    readonly UIElement empty, overlay, toast, clearBtn, zone, spotRect, inspectZone, listBar;
+    readonly TextBlock listCount, statusText, toastTx;
+    readonly SolidColorBrush ledB, zoneBb, inspectBb;
     readonly DropShadowEffect ledFx;
-    readonly ScaleTransform pillSc, ovSc, toastSc, sparkSc, ringSc;
-    readonly TranslateTransform toastT, statusT, arrowT, ovArrowT;
-    readonly RotateTransform sparkRot, dashRot, sweepRot;
+    readonly ScaleTransform ovCleanSc, ovInspectSc, toastSc, sparkSc, ringSc;
+    readonly TranslateTransform toastT, statusT, arrowT, ovArrowT, ovLensT;    readonly RotateTransform sparkRot, dashRot, sweepRot;
     readonly System.Windows.Shapes.Path toastIc;
     readonly RadialGradientBrush spot;
     readonly DispatcherTimer dragTimer = new DispatcherTimer(), toastTimer = new DispatcherTimer();
     readonly FrameworkElement logoRing, zoneSweep, root;
     readonly ScrollViewer scroll;
-    int lastDrag, lastCount = -1, lastMenuClose;
+    int lastDrag, lastMenuClose;
+    string dropMode = "clean";
     bool busy, overlayOn;
 
     public Window Window { get { return w; } }
@@ -1244,14 +1310,14 @@ class MainWin
         w = (Window)XamlReader.Parse(WinXaml);
         root = G<FrameworkElement>("Root");
         rows = G<Panel>("Rows"); empty = G<UIElement>("Empty"); overlay = G<UIElement>("Overlay");
-        toast = G<UIElement>("Toast"); clearBtn = G<UIElement>("ClearBtn"); zone = G<UIElement>("Zone"); spotRect = G<UIElement>("SpotRect");
+        toast = G<UIElement>("Toast"); clearBtn = G<UIElement>("ClearBtn"); inspectZone = G<UIElement>("InspectZone"); listBar = G<UIElement>("ListBar"); zone = G<UIElement>("Zone"); spotRect = G<UIElement>("SpotRect");
         scroll = G<ScrollViewer>("Scroll");
-        pillText = G<TextBlock>("PillText"); statusText = G<TextBlock>("StatusText"); toastTx = G<TextBlock>("ToastTx");
-        pillBb = G<SolidColorBrush>("PillBb"); pillLedB = G<SolidColorBrush>("PillLedB"); ledB = G<SolidColorBrush>("LedB"); zoneBb = G<SolidColorBrush>("ZoneBb");
+        listCount = G<TextBlock>("ListCount"); statusText = G<TextBlock>("StatusText"); toastTx = G<TextBlock>("ToastTx");
+        inspectBb = G<SolidColorBrush>("InspectBb"); ledB = G<SolidColorBrush>("LedB"); zoneBb = G<SolidColorBrush>("ZoneBb");
         ledFx = G<DropShadowEffect>("LedFx");
-        pillSc = G<ScaleTransform>("PillSc"); ovSc = G<ScaleTransform>("OvSc"); toastSc = G<ScaleTransform>("ToastSc");
+        ovCleanSc = G<ScaleTransform>("OvCleanSc"); ovInspectSc = G<ScaleTransform>("OvInspectSc"); toastSc = G<ScaleTransform>("ToastSc");
         sparkSc = G<ScaleTransform>("SparkSc"); ringSc = G<ScaleTransform>("RingSc");
-        toastT = G<TranslateTransform>("ToastT"); statusT = G<TranslateTransform>("StatusT"); arrowT = G<TranslateTransform>("ArrowT"); ovArrowT = G<TranslateTransform>("OvArrowT");
+        toastT = G<TranslateTransform>("ToastT"); statusT = G<TranslateTransform>("StatusT"); arrowT = G<TranslateTransform>("ArrowT"); ovArrowT = G<TranslateTransform>("OvArrowT"); ovLensT = G<TranslateTransform>("OvLensT");
         sparkRot = G<RotateTransform>("SparkRot"); dashRot = G<RotateTransform>("DashRot"); sweepRot = G<RotateTransform>("SweepRot");
         toastIc = G<System.Windows.Shapes.Path>("ToastIc");
         spot = G<RadialGradientBrush>("Spot");
@@ -1287,6 +1353,9 @@ class MainWin
         InitStage();
         zone.MouseEnter += delegate { A.Tint(zoneBb, A.C("#80D4FF4A"), 250); };
         zone.MouseLeave += delegate { A.Tint(zoneBb, A.C("#2E2E36"), 300); };
+        inspectZone.MouseEnter += delegate { A.Tint(inspectBb, A.C("#806FF3FF"), 250); };
+        inspectZone.MouseLeave += delegate { A.Tint(inspectBb, A.C("#2E2E36"), 300); };
+        inspectZone.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e) { if (!(e.OriginalSource is DependencyObject && IsInButton((DependencyObject)e.OriginalSource))) PickInspect(); };
 
         // ripple on the lime buttons
         EventManager.RegisterClassHandler(typeof(Button), UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(Ripple));
@@ -1309,7 +1378,7 @@ class MainWin
         {
             ShowOverlay(false);
             string[] f = e.Data.GetData(DataFormats.FileDrop) as string[];
-            if (f != null) AddPaths(f);
+            if (f != null) { if (dropMode == "inspect") InspectDropped(f); else AddPaths(f); }
             e.Handled = true;
         };
         dragTimer.Interval = TimeSpan.FromMilliseconds(120);
@@ -1340,8 +1409,13 @@ class MainWin
             A.Loop(dashRot, RotateTransform.AngleProperty, 0, 360, 14000, null, false);
             A.Loop(arrowT, TranslateTransform.YProperty, 0, -3, 1800, A.Sine, true);
             A.Loop(ovArrowT, TranslateTransform.YProperty, 0, 6, 700, A.Sine, true);
-            A.Loop((IAnimatable)G<Rectangle>("Ants"), Shape.StrokeDashOffsetProperty, 0, -9.5, 1000, null, false);
+            A.Loop(ovLensT, TranslateTransform.YProperty, 0, 6, 700, A.Sine, true);
+            A.Loop(G<RotateTransform>("InspectDashRot"), RotateTransform.AngleProperty, 0, -360, 14000, null, false);
+            A.Loop(G<TranslateTransform>("LensT"), TranslateTransform.YProperty, 0, -3, 1800, A.Sine, true);
+            A.Loop((IAnimatable)G<Rectangle>("AntsClean"), Shape.StrokeDashOffsetProperty, 0, -9.5, 1000, null, false);
+            A.Loop((IAnimatable)G<Rectangle>("AntsInspect"), Shape.StrokeDashOffsetProperty, 0, -9.5, 1000, null, false);
             A.To(zone, UIElement.OpacityProperty, 1, 600, A.Out, 0, 0, null);
+            A.To(inspectZone, UIElement.OpacityProperty, 1, 600, A.Out, 120, 0, null);
             Refresh();
             if (args.Length > 0) AddPaths(args);
         };
@@ -1378,21 +1452,54 @@ class MainWin
 
     void OnDrag(object s, DragEventArgs e)
     {
-        if (e.Data.GetDataPresent(DataFormats.FileDrop)) { e.Effects = DragDropEffects.Copy; ShowOverlay(true); lastDrag = Environment.TickCount; }
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            e.Effects = DragDropEffects.Copy;
+            // the left half cleans, the right half inspects
+            SetDropMode(e.GetPosition(root).X < root.ActualWidth / 2 ? "clean" : "inspect");
+            ShowOverlay(true); lastDrag = Environment.TickCount;
+        }
         else e.Effects = DragDropEffects.None;
         e.Handled = true;
+    }
+
+    void SetDropMode(string mode)
+    {
+        if (mode == dropMode && overlayOn) return;
+        dropMode = mode;
+        bool clean = mode == "clean";
+        A.To(ovCleanSc, ScaleTransform.ScaleXProperty, clean ? 1 : .96, 380, A.Spring, 0, null, null);
+        A.To(ovCleanSc, ScaleTransform.ScaleYProperty, clean ? 1 : .96, 380, A.Spring, 0, null, null);
+        A.To(ovInspectSc, ScaleTransform.ScaleXProperty, clean ? .96 : 1, 380, A.Spring, 0, null, null);
+        A.To(ovInspectSc, ScaleTransform.ScaleYProperty, clean ? .96 : 1, 380, A.Spring, 0, null, null);
+        A.To(G<UIElement>("OvClean"), UIElement.OpacityProperty, clean ? 1 : .35, 220);
+        A.To(G<UIElement>("OvInspect"), UIElement.OpacityProperty, clean ? .35 : 1, 220);
     }
 
     void ShowOverlay(bool on)
     {
         if (on == overlayOn) return;
         overlayOn = on;
+        G<TextBlock>("OvCleanHint").Text = Opts.Replace ? "the original is replaced" : "a _clean copy is created";
         A.To(overlay, UIElement.OpacityProperty, on ? 1 : 0, on ? 220 : 180);
-        A.To(ovSc, ScaleTransform.ScaleXProperty, on ? 1 : .94, 380, A.Spring, 0, null, null);
-        A.To(ovSc, ScaleTransform.ScaleYProperty, on ? 1 : .94, 380, A.Spring, 0, null, null);
         if (on) lastDrag = Environment.TickCount;
     }
 
+    // a file dropped on the right half: open it in the inspector (the first one if several are dropped)
+    void InspectDropped(string[] paths)
+    {
+        var files = new List<string>();
+        foreach (string raw in paths)
+        {
+            string p;
+            try { p = System.IO.Path.GetFullPath(raw); } catch (Exception) { continue; }
+            if (Directory.Exists(p)) Walk(p, files); else if (File.Exists(p)) files.Add(p);
+            if (files.Count > 0) break;
+        }
+        if (files.Count == 0) { ShowToast("nothing to inspect", "#FFB454", "GCross"); return; }
+        inspector.Open(files[0], null);
+        if (paths.Length > 1) ShowToast("inspecting the first file", "#6FF3FF", "GCheck");
+    }
     // ----- files -----
 
     void Pick()
@@ -1445,7 +1552,7 @@ class MainWin
         int i = 0;
         foreach (string f in files)
         {
-            var j = new Job { Src = f, Args = Opts.Build(Opts.IsImage(f)), CheckC2pa = Opts.WantsC2pa() };
+            var j = new Job { Src = f, Args = Opts.Build(Opts.IsImage(f)), CheckC2pa = Opts.WantsC2pa(), Replace = Opts.Replace };
             j.Row = new RowView(j, w);
             j.Row.InspectRequested += OnInspect;
             rows.Children.Add(j.Row.Card);
@@ -1511,21 +1618,14 @@ class MainWin
         int total = jobs.Count;
         bool nowBusy = pend > 0;
 
-        pillText.Text = total == 0 ? "no files" : total + (total == 1 ? " file" : " files");
-        if (lastCount >= 0 && total != lastCount && total > 0)
-        {   // counter bump
-            A.To(pillSc, ScaleTransform.ScaleXProperty, 1.18, 120, A.Out, 0, null, delegate { A.To(pillSc, ScaleTransform.ScaleXProperty, 1, 380, A.Spring, 0, null, null); });
-            A.To(pillSc, ScaleTransform.ScaleYProperty, 1.18, 120, A.Out, 0, null, delegate { A.To(pillSc, ScaleTransform.ScaleYProperty, 1, 380, A.Spring, 0, null, null); });
-        }
-        lastCount = total;
-        A.Tint(pillBb, total > 0 ? A.C("#40D4FF4A") : A.C("#2E2E36"), 300);
-        A.Tint(pillLedB, total > 0 ? A.C("#D4FF4A") : A.C("#3C3C46"), 300);
-
+        listCount.Text = total + (total == 1 ? " file" : " files");
+        bool showBar = total > 0;
+        listBar.IsHitTestVisible = showBar;
+        A.To(listBar, UIElement.OpacityProperty, showBar ? 1 : 0, 250);
         empty.Visibility = total == 0 ? Visibility.Visible : Visibility.Collapsed;
         bool canClear = total > 0 && !nowBusy;
-        clearBtn.IsHitTestVisible = canClear;
-        A.To(clearBtn, UIElement.OpacityProperty, canClear ? 1 : 0, 250);
-
+        clearBtn.IsEnabled = canClear;
+        A.To(clearBtn, UIElement.OpacityProperty, canClear ? 1 : .4, 250);
         string text, led; bool pulse = false; double glow = 0;
         if (nowBusy)
         {
@@ -1622,7 +1722,7 @@ class MainWin
     TextBox tagsBox;
     TextBlock tagsHint, tagsNote, cmdText, keepLabel;
     bool drawerOpen, syncing;
-    ToggleButton animSw;
+    ToggleButton animSw, replaceSw;
     PixelStage mainStage;
     FrameworkElement zoneContent, sceneHost;
     TextBlock sceneText;
@@ -1716,6 +1816,7 @@ class MainWin
         }
         keepSw[0].IsChecked = Opts.KeepIcc; keepSw[1].IsChecked = Opts.KeepOri;
         if (animSw != null) animSw.IsChecked = Opts.Anim;
+        if (replaceSw != null) replaceSw.IsChecked = Opts.Replace;
         for (int i = 0; i < 2; i++) { keepSw[i].IsEnabled = all; A.To(keepRowEls[i], UIElement.OpacityProperty, all ? 1 : .35, 250); }
         A.To(keepLabel, UIElement.OpacityProperty, all ? 1 : .35, 250);
         if (tagsBox.Text != Opts.TagText) tagsBox.Text = Opts.TagText;
@@ -1773,14 +1874,7 @@ class MainWin
         G<ContentControl>("StageHost").Content = mainStage;
         inspector = new InspectorPanel(w, (Panel)root, G<UIElement>("Toast"), delegate(string f) { AddPaths(new[] { f }); });
 
-        G<Button>("InspectBtn").Click += delegate
-        {
-            var d = new OpenFileDialog();
-            d.Title = "Choose a file to inspect";
-            d.Filter = "Videos and photos|*.mp4;*.mov;*.m4v;*.3gp;*.jpg;*.jpeg;*.png;*.webp;*.heic;*.heif;*.tif;*.tiff;*.gif|All files|*.*";
-            if (d.ShowDialog(w) == true) inspector.Open(d.FileName, null);
-        };
-
+        G<Button>("InspectPick").Click += delegate { PickInspect(); };
         // the animation switch lives in the Options panel
         var row = (FrameworkElement)XamlReader.Parse(OptRowXaml);
         ((TextBlock)row.FindName("T")).Text = "Cleaning animation";
@@ -1789,12 +1883,40 @@ class MainWin
         animSw.IsChecked = Opts.Anim;
         animSw.Click += delegate { if (syncing) return; Opts.Anim = animSw.IsChecked == true; Opts.Save(); };
         G<Panel>("UiRows").Children.Add(row);
+
+        // replacing originals is destructive, so it asks first
+        var outRow = (FrameworkElement)XamlReader.Parse(OptRowXaml);
+        ((TextBlock)outRow.FindName("T")).Text = "Replace originals";
+        ((TextBlock)outRow.FindName("D")).Text = "overwrite the file instead of saving a _clean copy; cannot be undone";
+        replaceSw = (ToggleButton)outRow.FindName("Sw"); replaceSw.Style = (Style)w.FindResource("Switch");
+        replaceSw.IsChecked = Opts.Replace;
+        replaceSw.Click += delegate
+        {
+            if (syncing) return;
+            if (replaceSw.IsChecked == true)
+            {
+                bool yes = Dlg.Show(w, "Replace your originals?",
+                    "Cleaned files will overwrite the originals, and the originals cannot be recovered. Keep a backup of anything important.\n\nIf a C2PA marker is still detected, the original is kept and the result is saved as a separate _clean copy.",
+                    "Replace originals", "Cancel", true);
+                if (!yes) { replaceSw.IsChecked = false; return; }
+            }
+            Opts.Replace = replaceSw.IsChecked == true; Opts.Save();
+        };
+        G<Panel>("OutRows").Children.Add(outRow);
+    }
+
+    void PickInspect()
+    {
+        var d = new OpenFileDialog();
+        d.Title = "Choose a file to inspect";
+        d.Filter = "Videos and photos|*.mp4;*.mov;*.m4v;*.3gp;*.jpg;*.jpeg;*.png;*.webp;*.heic;*.heif;*.tif;*.tiff;*.gif|All files|*.*";
+        if (d.ShowDialog(w) == true) inspector.Open(d.FileName, null);
     }
 
     void OnInspect(Job j)
     {
         if (j.State == State.Working) return;
-        inspector.Open(j.Src, (j.State == State.Done || j.State == State.Warn) && j.Out != null ? j.Out : null);
+        inspector.Open(j.Src, (j.State == State.Done || j.State == State.Warn) && j.Out != null && !j.Replaced ? j.Out : null);
     }
 
     // while files are being cleaned the drop zone turns into the brush-and-document scene

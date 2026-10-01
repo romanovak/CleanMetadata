@@ -170,7 +170,7 @@ class InspectorPanel
         <StackPanel Margin='20,4,14,20'>
           <Border x:Name='StageBox' Height='158' CornerRadius='14' Background='#0E0E11' BorderBrush='#232329' BorderThickness='1' Margin='0,0,0,16'>
             <Grid>
-              <ContentControl x:Name='StageHost' Width='240' Height='132' HorizontalAlignment='Center' VerticalAlignment='Top' Margin='0,8,0,0'/>
+              <ContentControl x:Name='StageHost' Width='224' Height='132' HorizontalAlignment='Center' VerticalAlignment='Top' Margin='0,8,0,0'/>
               <TextBlock x:Name='StageText' Text='reading metadata...' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#74747F' HorizontalAlignment='Center' VerticalAlignment='Bottom' Margin='0,0,0,10'/>
             </Grid>
           </Border>
