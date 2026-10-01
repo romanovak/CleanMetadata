@@ -20,7 +20,7 @@ try {
     Copy-Item "$ExifDir\exiftool_files" "$tmp\exiftool_files" -Recurse
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::CreateFromDirectory($tmp, "$tmp.zip", 'Optimal', $false)
-    $a = @('/nologo', '/target:winexe', '/optimize', '/warn:4', '/warnaserror+', "/lib:$fw\WPF",
+    $a = @('/nologo', '/target:winexe', '/optimize', '/platform:anycpu', '/warn:4', '/warnaserror+', "/lib:$fw\WPF",
         "/win32icon:$root\assets\icon.ico", "/win32manifest:$root\app.manifest",
         "/resource:$root\assets\icon.ico,app.ico", "/resource:$root\assets\logo.png,logo.png", "/resource:$tmp.zip,tools.zip",
         "/out:$Out",

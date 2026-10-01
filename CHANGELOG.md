@@ -7,6 +7,7 @@ First release.
 - Drag-and-drop GUI front end for ExifTool: drop files or folders, get `_clean` copies.
 - Options panel: presets (All, Privacy, Provenance, Custom), one switch per metadata category, extra tags to remove, and a copyable preview of the equivalent ExifTool command. Choices are remembered.
 - Inspector: see the metadata a file carries, grouped by category; for cleaned files each tag is marked removed or kept.
+- New vector logo (`assets/logo.svg`, plus a white version) used for the icon, the app header and the repository; the pixel-art sprites are generated from it.
 - Pixel-art cleaning animation (a brush wipes a document and the metadata turns into dust) and a magnifier animation while inspecting. The cleaning animation can be turned off in Options.
 - Removes EXIF, XMP, IPTC and C2PA / Content Credentials from videos and photos; originals are never modified.
 - Flags copies where a C2PA marker is still detected.

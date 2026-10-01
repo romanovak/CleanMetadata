@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/icon.png" width="128" alt="CleanMetadata icon"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-white.svg">
+    <img src="assets/logo.svg" width="128" alt="CleanMetadata logo">
+  </picture>
+</p>
 
 # CleanMetadata
 
@@ -45,7 +50,7 @@ Click the magnifier on any row, or **Inspect...** in the drop area to pick a fil
 
 ## Cleaning animation
 
-While files are being cleaned, a pixel-art brush sweeps a document and its metadata turns into dust. The real work takes milliseconds, so the animation holds each file for a moment (about three seconds per batch in total, never more than 1.5 s per file) so you can see it happen. If you would rather not wait, turn **Cleaning animation** off in Options and cleaning is instant.
+While files are being cleaned, a pixel-art brush sweeps a document and its metadata turns into dust. The real work takes milliseconds, so the animation holds each file for a moment (about three and a half seconds per batch in total, never more than 1.8 s per file) so you can see it happen. The dust is a handful of tiny pixels and sparkles that drift up slowly. If you would rather not wait, turn **Cleaning animation** off in Options and cleaning is instant.
 
 ## Requirements
 
@@ -104,7 +109,7 @@ Requirements: Windows 10/11 and the [Windows 64-bit ExifTool package](https://ex
 
 The output is `dist\CleanMetadata.exe`, with ExifTool and its `exiftool_files` folder embedded as a resource.
 
-`make-icon.ps1` regenerates `assets\icon.ico` and `assets\logo.png` from a PNG, and `make-sprites.ps1` prepares the pixel-art sprites in `assets\sprites` from four source images (document, brush, magnifier, dust). Both re-draw the images, so no metadata from the source files survives.
+All artwork comes from one vector logo, `assets\logo.svg`. `make-brand.ps1` builds the black and white SVGs, the app icon (`icon.ico`, `icon.png`, `logo.png`) and the GitHub social preview from it, and `make-sprites.ps1` turns the same shapes into the pixel-art sprites in `assets\sprites`. With `-Source` the brand script imports a logo exported from a vector editor and keeps only the visible shapes, so no editor metadata, hidden layers or embedded images survive.
 
 ## License
 

@@ -18,16 +18,19 @@ enum StageMode { Clean, Scan }
 // pixels with nearest-neighbor filtering and every position is snapped to that grid, so the pixels stay crisp.
 class PixelStage : Canvas
 {
-    // art pixel size of each sprite
-    const int DocW = 34, DocH = 35, BrushW = 29, BrushH = 33, LupaW = 40, LupaH = 43;
+    // art pixel size of each sprite (see make-sprites.ps1)
+    const int DocW = 45, DocH = 49, BrushW = 41, BrushH = 42, LupaW = 50, LupaH = 50;
     // contact point of the brush bristles and center of the magnifier lens, in sprite pixels
-    const double TipX = 10, TipY = 27, LensX = 17, LensY = 17;
+    const double TipX = 9.4, TipY = 40.2, LensX = 18.6, LensY = 18.6;
     // area of the document that holds the metadata lines, in doc pixels
-    const double MetaTop = 12, MetaBottom = 29, MetaLeft = 7, MetaRight = 27;
-
+    const double MetaTop = 17, MetaBottom = 34, MetaLeft = 8.5, MetaRight = 31;
     class Particle
     {
-        public Image Img; public double X, Y, Vx, Vy, Age, Life; public bool Alive;
+        public Image Img;        // sparkle sprite, or
+        public Rectangle Dot;    // a single bright pixel (both are created once and reused)
+        public bool Spark;
+        public double X, Y, Vx, Vy, Age, Life, Phase; public bool Alive;
+        public FrameworkElement El { get { return Spark ? (FrameworkElement)Img : Dot; } }
     }
 
     static readonly Dictionary<string, BitmapSource> Cache = new Dictionary<string, BitmapSource>();
@@ -40,7 +43,7 @@ class PixelStage : Canvas
     readonly RotateTransform brushRot = new RotateTransform();
     readonly Stopwatch clock = new Stopwatch();
 
-    double px = 3, docL, docT;
+    double px = 2, docL, docT;
     StageMode mode = StageMode.Clean;
     bool running, stopping, laidOut;
     double last, stopAt, spawnAcc;
@@ -69,7 +72,7 @@ class PixelStage : Canvas
         foreach (var im in new[] { doc, clean, brush, lupa }) RenderOptions.SetBitmapScalingMode(im, BitmapScalingMode.NearestNeighbor);
         doc.Source = Sprite("doc"); clean.Source = Sprite("doc_clean");
         brush.Source = Sprite("brush"); lupa.Source = Sprite("lupa");
-        for (int i = 0; i < 8; i++) { var s = Sprite("p" + i); if (s != null) dust.Add(s); }
+        foreach (string n in new[] { "spark3a", "spark3b", "spark3a", "spark3b", "spark5a", "spark5b" }) { var s = Sprite(n); if (s != null) dust.Add(s); }
 
         for (int i = 0; i < bars.Length; i++)
         {
@@ -87,7 +90,7 @@ class PixelStage : Canvas
             // use a whole number of device pixels per art pixel so nearest-neighbor scaling stays even
             var src = PresentationSource.FromVisual(this);
             double k = src != null ? src.CompositionTarget.TransformToDevice.M11 : 1;
-            px = Math.Max(2, Math.Round(3 * k)) / k;
+            px = Math.Max(2, Math.Round(2 * k)) / k;
             Layout();
         };
         Layout();
@@ -101,7 +104,7 @@ class PixelStage : Canvas
         Place(brush, BrushW, BrushH, 0, 0); Place(lupa, LupaW, LupaH, 0, 0);
         brush.RenderTransformOrigin = new Point(TipX / BrushW, TipY / BrushH);
         // highlight bars sit on the three metadata lines of the document sprite
-        double[] rows = { 13, 18, 24 }, heights = { 3, 3, 3 };
+        double[] rows = { 18, 24, 30 }, heights = { 3, 3, 3 };
         for (int i = 0; i < bars.Length; i++)
         {
             bars[i].Width = (MetaRight - MetaLeft + 1) * px; bars[i].Height = heights[i] * px;
@@ -121,7 +124,12 @@ class PixelStage : Canvas
     {
         if (!laidOut) Layout();
         mode = m; stopping = false; stopDone = null;
-        foreach (var p in particles) { p.Alive = false; p.Img.Visibility = Visibility.Collapsed; }
+        foreach (var p in particles)
+        {
+            p.Alive = false;
+            if (p.Img != null) p.Img.Visibility = Visibility.Collapsed;
+            if (p.Dot != null) p.Dot.Visibility = Visibility.Collapsed;
+        }
         brush.Visibility = m == StageMode.Clean ? Visibility.Visible : Visibility.Collapsed;
         lupa.Visibility = m == StageMode.Scan ? Visibility.Visible : Visibility.Collapsed;
         clean.Visibility = m == StageMode.Clean ? Visibility.Visible : Visibility.Collapsed;
@@ -138,7 +146,7 @@ class PixelStage : Canvas
         if (!running) { if (done != null) done(); return; }
         stopping = true; stopDone = done; stopAt = clock.Elapsed.TotalSeconds;
         outX = GetLeft(brush) + TipX * px; outY = GetTop(brush) + TipY * px;
-        if (mode == StageMode.Clean) { Emit(docL + DocW * px / 2, docT + 20 * px, 0, 8, 1.3); }
+        if (mode == StageMode.Clean) { Emit(docL + DocW * px / 2, docT + 24 * px, 0, 10, 1); }
     }
 
     void End()
@@ -150,29 +158,44 @@ class PixelStage : Canvas
 
     // ----- particles -----
 
+    // Dust is a mix of single bright pixels and tiny plus-shaped sparkles. It drifts up slowly, sways a little and
+    // fades in steps; most of it is one art pixel big.
     void Emit(double x, double y, double push, int count, double speed)
     {
-        for (int n = 0; n < count && dust.Count > 0; n++)
+        for (int n = 0; n < count; n++)
         {
             Particle p = null;
             foreach (var q in particles) if (!q.Alive) { p = q; break; }
             if (p == null)
             {
-                if (particles.Count >= 48) return;
-                p = new Particle { Img = new Image() };
-                RenderOptions.SetBitmapScalingMode(p.Img, BitmapScalingMode.NearestNeighbor);
-                particles.Add(p); Children.Add(p.Img);
+                if (particles.Count >= 64) return;
+                p = new Particle();
+                particles.Add(p);
             }
-            // the two big sprites are rare, most dust is the small ones
-            int idx = Rng.NextDouble() < .18 ? Rng.Next(Math.Min(2, dust.Count)) : 2 + Rng.Next(Math.Max(1, dust.Count - 2));
-            if (idx >= dust.Count) idx = dust.Count - 1;
-            var spr = dust[idx];
-            p.Img.Source = spr; p.Img.Width = spr.PixelWidth * px; p.Img.Height = spr.PixelHeight * px;
-            p.X = x + (Rng.NextDouble() - .5) * 8 * px; p.Y = y + (Rng.NextDouble() - .5) * 3 * px;
-            p.Vx = ((Rng.NextDouble() - .5) * 110 + push) * speed; p.Vy = (-40 - Rng.NextDouble() * 110) * speed;
-            p.Age = 0; p.Life = .65 + Rng.NextDouble() * .45; p.Alive = true;
-            p.Img.Visibility = Visibility.Visible; p.Img.Opacity = 1;
-            SetLeft(p.Img, Snap(p.X)); SetTop(p.Img, Snap(p.Y));
+            bool sparkle = dust.Count > 0 && Rng.NextDouble() < .22;
+            if (p.Img != null) p.Img.Visibility = Visibility.Collapsed;
+            if (p.Dot != null) p.Dot.Visibility = Visibility.Collapsed;
+            p.Spark = sparkle;
+            if (sparkle)
+            {
+                if (p.Img == null) { p.Img = new Image(); RenderOptions.SetBitmapScalingMode(p.Img, BitmapScalingMode.NearestNeighbor); Children.Add(p.Img); }
+                var spr = dust[Rng.NextDouble() < .8 ? Rng.Next(4) % dust.Count : Math.Min(4 + Rng.Next(2), dust.Count - 1)];
+                p.Img.Source = spr; p.Img.Width = spr.PixelWidth * px; p.Img.Height = spr.PixelHeight * px;
+            }
+            else
+            {
+                if (p.Dot == null) { p.Dot = new Rectangle(); Children.Add(p.Dot); }
+                double s = (Rng.NextDouble() < .8 ? 1 : 2) * px;
+                p.Dot.Width = s; p.Dot.Height = s;
+                double t = Rng.NextDouble();
+                bool glint = Rng.NextDouble() < .12;
+                p.Dot.Fill = new SolidColorBrush(glint ? Color.FromRgb(232, 255, 248) : Color.FromRgb((byte)(212 + (111 - 212) * t), (byte)(255 + (243 - 255) * t), (byte)(74 + (255 - 74) * t)));
+            }
+            p.X = x + (Rng.NextDouble() - .5) * 9 * px; p.Y = y + (Rng.NextDouble() - .5) * 3 * px;
+            p.Vx = ((Rng.NextDouble() - .5) * 34 + push * .3) * speed; p.Vy = (-8 - Rng.NextDouble() * 22) * speed;
+            p.Age = 0; p.Life = 1.5 + Rng.NextDouble() * 1.0; p.Phase = Rng.NextDouble() * 6.28; p.Alive = true;
+            p.El.Visibility = Visibility.Visible; p.El.Opacity = 1;
+            SetLeft(p.El, Snap(p.X)); SetTop(p.El, Snap(p.Y));
         }
     }
 
@@ -182,17 +205,17 @@ class PixelStage : Canvas
         {
             if (!p.Alive) continue;
             p.Age += dt;
-            if (p.Age >= p.Life) { p.Alive = false; p.Img.Visibility = Visibility.Collapsed; continue; }
-            p.Vy += 170 * dt;                 // gravity
-            p.Vx *= (1 - .6 * dt);            // air drag
-            p.X += p.Vx * dt; p.Y += p.Vy * dt;
+            if (p.Age >= p.Life) { p.Alive = false; p.El.Visibility = Visibility.Collapsed; continue; }
+            p.Vy += 3 * dt;                    // almost weightless
+            p.Vx *= (1 - 1.1 * dt);            // air drag
+            p.Vy *= (1 - .7 * dt);
+            p.X += (p.Vx + Math.Sin(p.Age * 2.6 + p.Phase) * 7) * dt; p.Y += p.Vy * dt;
             double f = p.Age / p.Life;
             // stepped fade (pixel-art style) instead of a smooth one
-            p.Img.Opacity = f < .55 ? 1 : (f < .75 ? .7 : (f < .9 ? .4 : .2));
-            SetLeft(p.Img, Snap(p.X)); SetTop(p.Img, Snap(p.Y));
+            p.El.Opacity = f < .5 ? 1 : (f < .68 ? .8 : (f < .82 ? .55 : (f < .93 ? .3 : .15)));
+            SetLeft(p.El, Snap(p.X)); SetTop(p.El, Snap(p.Y));
         }
     }
-
     // ----- frame loop -----
 
     const double Period = 1.55;
@@ -201,7 +224,7 @@ class PixelStage : Canvas
     {
         double t = clock.Elapsed.TotalSeconds, dt = Math.Min(.05, t - last); last = t;
         Advance(t, dt);
-        if (stopping && t - stopAt > .85) { stopping = false; A.To(this, OpacityProperty, 0, 220, A.Out, 0, null, End); }
+        if (stopping && t - stopAt > 1.3) { stopping = false; A.To(this, OpacityProperty, 0, 220, A.Out, 0, null, End); }
     }
 
     void Advance(double t, double dt)
@@ -266,7 +289,7 @@ class PixelStage : Canvas
                 double endX = docL + MetaLeft * px, endY = docT + MetaBottom * px;
                 tipX = endX + (offX - endX) * u; tipY = endY + (offY - endY) * u;
                 reveal = docH; clean.Opacity = 1;
-                if (ct - tsweep < dt * 2) Emit(docL + docW / 2, docT + 20 * px, 0, 6, 1.1); // puff of dust when the wipe ends
+                if (ct - tsweep < dt * 2) Emit(docL + docW / 2, docT + 24 * px, 0, 8, 1); // a last soft puff when the wipe ends
             }
         }
 
@@ -276,7 +299,7 @@ class PixelStage : Canvas
         // reveal is measured from the top of the document; the clip is in the image's own coordinates
         if (sweeping)
         {
-            spawnAcc += dt * 42;
+            spawnAcc += dt * 30;
             int n = (int)spawnAcc; spawnAcc -= n;
             double dir = -Math.Sin(3 * Math.PI * ((t % Period - .14) / 1.08)); // push the dust the way the brush moves
             if (n > 0) Emit(tipX, tipY - 2 * px, dir * 70, n, 1);
@@ -293,7 +316,7 @@ class PixelStage : Canvas
         if (stopping) { x = x + (cx + docW * .62 - x) * Ease(ex); y = y + (docT - 6 * px - y) * Ease(ex); }
         SetLeft(lupa, Snap(x - LensX * px)); SetTop(lupa, Snap(y - LensY * px));
 
-        double[] rowsMid = { 14.5, 19.5, 25.5 };
+        double[] rowsMid = { 19.8, 25.5, 31.4 };
         for (int i = 0; i < bars.Length; i++)
         {
             double dy = Math.Abs(y - (docT + rowsMid[i] * px)) / px;
@@ -301,8 +324,8 @@ class PixelStage : Canvas
             double a = Math.Max(0, 1 - dy / 4.5) * Math.Max(0, 1 - dx / 16);
             bars[i].Opacity = stopping ? 0 : Math.Round(a * 3) / 3 * .55; // stepped glow
         }
-        spawnAcc += dt * 7;
+        spawnAcc += dt * 5;
         int n = (int)spawnAcc; spawnAcc -= n;
-        if (n > 0 && !stopping) Emit(x, y, 0, n, .35);
+        if (n > 0 && !stopping) Emit(x, y, 0, n, .5);
     }
 }

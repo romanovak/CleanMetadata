@@ -1455,8 +1455,8 @@ class MainWin
         scroll.ScrollToBottom();
         Refresh();
 
-        // With the animation on, each file takes at least a moment (about 3 s per batch in total) so the cleaning can be seen.
-        int minMs = Opts.Anim ? Math.Max(250, Math.Min(1500, 3000 / batch.Count)) : 0;
+        // With the animation on, each file takes at least a moment (about 3.5 s per batch in total) so the cleaning can be seen.
+        int minMs = Opts.Anim ? Math.Max(250, Math.Min(1800, 3600 / batch.Count)) : 0;
 
         // one batch at a time, on a worker thread so the window never freezes
         ThreadPool.QueueUserWorkItem(delegate
