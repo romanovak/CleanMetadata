@@ -1207,7 +1207,7 @@ class MainWin
             <Grid.ColumnDefinitions><ColumnDefinition Width='*'/><ColumnDefinition Width='Auto'/></Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment='Center'>
               <TextBlock Text='Replace originals' FontSize='13' FontWeight='SemiBold' Foreground='#ECECEF'/>
-              <TextBlock x:Name='ReplaceHint' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F' Margin='0,2,0,0' Text='saves a _clean copy next to each file'/>
+              <TextBlock x:Name='ReplaceHint' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F' Margin='0,2,0,0' Text='overwrite the original instead of saving a _clean copy'/>
             </StackPanel>
             <ToggleButton x:Name='ReplaceSw' Grid.Column='1' VerticalAlignment='Center' Style='{StaticResource Switch}'/>
           </Grid>
@@ -2026,7 +2026,8 @@ class MainWin
     void ReplaceHint()
     {
         replaceHint.Foreground = new SolidColorBrush(A.C(Opts.Replace ? "#FFB454" : "#74747F"));
-        replaceHint.Text = Opts.Replace ? "overwrites each original, cannot be undone" : "saves a _clean copy next to each file";    }
+        replaceHint.Text = "overwrite the original instead of saving a _clean copy";
+    }
 
     void PickInspect()
     {
