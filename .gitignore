@@ -1,0 +1,4 @@
+dist/
+*.exe
+*.zip
+*.pdb
