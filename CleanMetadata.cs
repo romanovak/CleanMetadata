@@ -108,7 +108,7 @@ static class Tools
         Directory.Move(tmp, dir);
     }
 }
-enum State { Queued, Working, Done, Warn, Error }
+enum State { Idle, Queued, Working, Done, Warn, Error }
 
 class Job
 {
@@ -212,6 +212,25 @@ static class Opts
         foreach (var o in Items) if (o.On) a.AddRange(o.Args);
         List<string> bad;
         foreach (string t in Tags(out bad)) a.Add("-" + t + "=");
+        return a;
+    }
+
+    // arguments for a hand-picked set of categories (the "Custom" choice in the inspector); allRest behaves like the All preset
+    public static List<string> BuildFor(string[] keys, bool allRest, bool image)
+    {
+        var a = new List<string>();
+        if (allRest)
+        {
+            a.Add("-all=");
+            if (image && (KeepIcc || KeepOri))
+            {
+                a.Add("-tagsfromfile"); a.Add("@");
+                if (KeepIcc) a.Add("-ColorSpaceTags");
+                if (KeepOri) a.Add("-Orientation");
+            }
+            return a;
+        }
+        foreach (var o in Items) if (Array.IndexOf(keys, o.Key) >= 0) a.AddRange(o.Args);
         return a;
     }
 
@@ -456,6 +475,7 @@ class RowView
   <Border.RenderTransform>
     <TransformGroup><ScaleTransform x:Name='Sc' ScaleX='.98' ScaleY='.98'/><TranslateTransform x:Name='Tx' Y='12'/></TransformGroup>
   </Border.RenderTransform>
+  <StackPanel>
   <Grid>
     <Border x:Name='Shim' CornerRadius='14' Margin='-12,-10,-8,-10' IsHitTestVisible='False' Opacity='0'>
       <Border.Background>
@@ -495,6 +515,10 @@ class RowView
       <Button x:Name='Open' Grid.Column='4' Visibility='Collapsed' Opacity='0' Margin='2,0,0,0' ToolTip='Show in folder'/>
     </Grid>
   </Grid>
+  <Border x:Name='Detail' Visibility='Collapsed' Margin='0,12,0,2' Padding='0,14,0,2' BorderBrush='#232329' BorderThickness='0,1,0,0'>
+    <Border.LayoutTransform><ScaleTransform x:Name='DetailSc' ScaleY='0'/></Border.LayoutTransform>
+  </Border>
+  </StackPanel>
 </Border>";
 
     static readonly Color Line = A.C("#232329"), Line2 = A.C("#2E2E36");
@@ -508,7 +532,11 @@ class RowView
     readonly FrameworkElement shim, tile, iSpin, iCheck, iCross, iWarn, iQueued;
     readonly TextBlock sub, label;
     readonly Button open, insp;
-    public event Action<Job> InspectRequested;
+    public event Action<Job, string[], bool> CleanRequested;   // from the inspector: clean this file (keys = custom categories, or null for the current Options)
+    readonly FrameworkElement detail;
+    readonly ScaleTransform detailSc;
+    InspectView view;
+    bool detailOpen;
     readonly Window win;
     bool hover;
 
@@ -527,6 +555,7 @@ class RowView
         iQueued = (FrameworkElement)Card.FindName("IQueued");
         sub = (TextBlock)Card.FindName("Sub"); label = (TextBlock)Card.FindName("Label");
         open = (Button)Card.FindName("Open"); insp = (Button)Card.FindName("Insp");
+        detail = (FrameworkElement)Card.FindName("Detail"); detailSc = (ScaleTransform)Card.FindName("DetailSc");
 
         string ext = System.IO.Path.GetExtension(j.Src).TrimStart('.').ToUpperInvariant();
         ((TextBlock)Card.FindName("Ext")).Text = ext.Length > 4 ? ext.Substring(0, 4) : ext;
@@ -552,11 +581,39 @@ class RowView
             Stroke = (Brush)new BrushConverter().ConvertFromString("#A9A9B3"), StrokeThickness = 1.7, Width = 14, Height = 14, Stretch = Stretch.Uniform,
             StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round
         };
-        insp.Click += delegate { if (InspectRequested != null) InspectRequested(job); };
+        insp.Click += delegate { ToggleDetail(); };
 
         Card.MouseEnter += delegate { hover = true; Hover(true); };
         Card.MouseLeave += delegate { hover = false; Hover(false); };
         Card.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e) { if (e.ClickCount == 2) Reveal(); };
+    }
+
+    // ----- inline inspector -----
+
+    void EnsureView()
+    {
+        if (view != null) return;
+        view = new InspectView(win, job, delegate(string[] keys, bool rest) { if (CleanRequested != null) CleanRequested(job, keys, rest); });
+        ((Border)detail).Child = view.Root;
+    }
+
+    public void ToggleDetail() { EnsureView(); SetDetail(!detailOpen); }
+
+    public void Expand() { EnsureView(); SetDetail(true); }
+
+    void SetDetail(bool on)
+    {
+        detailOpen = on;
+        // the magnifier lights up while the detail is open
+        ((System.Windows.Shapes.Path)insp.Content).Stroke = new SolidColorBrush(A.C(on ? "#D4FF4A" : "#A9A9B3"));
+        if (on)
+        {
+            detail.Visibility = Visibility.Visible;
+            A.To(detailSc, ScaleTransform.ScaleYProperty, 1, 420, A.Out, 0, 0, null);
+            view.EnsureLoaded();
+            Card.Dispatcher.BeginInvoke(new Action(delegate { Card.BringIntoView(); }), System.Windows.Threading.DispatcherPriority.Background);
+        }
+        else A.To(detailSc, ScaleTransform.ScaleYProperty, 0, 240, A.Out, 0, null, delegate { if (!detailOpen) detail.Visibility = Visibility.Collapsed; });
     }
 
     void Reveal()
@@ -590,7 +647,7 @@ class RowView
         A.To(tileRot, RotateTransform.AngleProperty, on ? -8 : 0, 450, A.Spring, 0, null, null);
         A.To(tileSc, ScaleTransform.ScaleXProperty, on ? 1.08 : 1, 450, A.Spring, 0, null, null);
         A.To(tileSc, ScaleTransform.ScaleYProperty, on ? 1.08 : 1, 450, A.Spring, 0, null, null);
-        if (job.State == State.Done || job.State == State.Queued)
+        if (job.State == State.Done || job.State == State.Queued || job.State == State.Idle)
             A.Tint(bb, on ? Line2 : Line, 250);
     }
 
@@ -610,8 +667,23 @@ class RowView
 
     public void SetState(State s)
     {
+        if (view != null)
+        {
+            if (s == State.Working || s == State.Queued) view.CleaningStarted();
+            else if (s == State.Done || s == State.Warn || s == State.Error) { view.Stale = true; if (detailOpen) view.EnsureLoaded(); }
+        }
         switch (s)
         {
+            case State.Idle:
+            case State.Queued:
+                StopWork();
+                ShowIcon(iQueued);
+                Status(s == State.Idle ? "Not cleaned" : "Queued", "#74747F");
+                A.Tint(bb, hover ? Line2 : Line, 250);
+                sub.Foreground = new SolidColorBrush(A.C("#74747F"));
+                A.Swap(sub, subT, System.IO.Path.GetDirectoryName(job.Src));
+                open.Visibility = Visibility.Collapsed; open.Opacity = 0;
+                break;
             case State.Working:
                 ShowIcon(iSpin);
                 A.Loop(spinRot, RotateTransform.AngleProperty, 0, 360, 800, null, false);
@@ -1368,7 +1440,6 @@ class MainWin
         w.PreviewKeyDown += delegate(object s, KeyEventArgs e)
         {
             if (e.Key == Key.O && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { Pick(); e.Handled = true; }
-            else if (e.Key == Key.Escape && inspector != null && inspector.IsOpen) { inspector.Close(); e.Handled = true; }
             else if (e.Key == Key.Escape && drawerOpen) { ToggleDrawer(false); e.Handled = true; }
         };
 
@@ -1485,7 +1556,7 @@ class MainWin
         if (on) lastDrag = Environment.TickCount;
     }
 
-    // a file dropped on the right half: open it in the inspector (the first one if several are dropped)
+    // a file dropped on the right half (or picked with Choose file): it joins the list as an inspect-only row, already open
     void InspectDropped(string[] paths)
     {
         var files = new List<string>();
@@ -1497,7 +1568,7 @@ class MainWin
             if (files.Count > 0) break;
         }
         if (files.Count == 0) { ShowToast("nothing to inspect", "#FFB454", "GCross"); return; }
-        inspector.Open(files[0], null);
+        AddInspectRow(files[0]);
         if (paths.Length > 1) ShowToast("inspecting the first file", "#6FF3FF", "GCheck");
     }
     // ----- files -----
@@ -1537,31 +1608,71 @@ class MainWin
             if (Directory.Exists(p)) Walk(p, files);
             else if (File.Exists(p)) files.Add(p);
         }
-        // skip files that are already in the list (or repeated in this drop)
-        var fresh = new List<string>();
+        // files already in the list are skipped, except rows that were only inspected: those get cleaned now
+        var fresh = new List<string>(); var again = new List<Job>();
         foreach (string f in files)
         {
             string ff = f;
-            bool known = jobs.Exists(delegate(Job x) { return string.Equals(x.Src, ff, StringComparison.OrdinalIgnoreCase); })
-                || fresh.Exists(delegate(string x) { return string.Equals(x, ff, StringComparison.OrdinalIgnoreCase); });
-            if (!known) fresh.Add(f);
+            Job existing = jobs.Find(delegate(Job x) { return string.Equals(x.Src, ff, StringComparison.OrdinalIgnoreCase); });
+            if (existing != null) { if (existing.State == State.Idle && !again.Contains(existing)) again.Add(existing); continue; }
+            if (!fresh.Exists(delegate(string x) { return string.Equals(x, ff, StringComparison.OrdinalIgnoreCase); })) fresh.Add(f);
         }
-        files = fresh;
-        if (files.Count == 0) return;
         var batch = new List<Job>();
         int i = 0;
-        foreach (string f in files)
+        foreach (string f in fresh)
         {
-            var j = new Job { Src = f, Args = Opts.Build(Opts.IsImage(f)), CheckC2pa = Opts.WantsC2pa(), Replace = Opts.Replace };
+            var j = new Job { Src = f };
+            PrepareJob(j, null, false);
             j.Row = new RowView(j, w);
-            j.Row.InspectRequested += OnInspect;
+            j.Row.CleanRequested += OnCleanRequested;
             rows.Children.Add(j.Row.Card);
             j.Row.In(Math.Min(i, 8) * 70);
             jobs.Add(j); batch.Add(j); i++;
         }
+        foreach (Job j in again) { PrepareJob(j, null, false); j.Row.SetState(State.Queued); batch.Add(j); }
+        if (batch.Count == 0) return;
         scroll.ScrollToBottom();
         Refresh();
+        StartBatch(batch);
+    }
 
+    // snapshots the settings for one file: the current Options, or a hand-picked set of categories
+    void PrepareJob(Job j, string[] keys, bool allRest)
+    {
+        bool img = Opts.IsImage(j.Src);
+        if (keys == null) { j.Args = Opts.Build(img); j.CheckC2pa = Opts.WantsC2pa(); }
+        else { j.Args = Opts.BuildFor(keys, allRest, img); j.CheckC2pa = allRest || Array.IndexOf(keys, "c2pa") >= 0; }
+        j.Replace = Opts.Replace; j.Out = null; j.Note = null; j.Replaced = false; j.State = State.Queued;
+    }
+
+    // "Clean this file" / "Custom" in a row's inspector
+    void OnCleanRequested(Job j, string[] keys, bool allRest)
+    {
+        if (j.State == State.Working || j.State == State.Queued) return;
+        PrepareJob(j, keys, allRest);
+        j.Row.SetState(State.Queued);
+        Refresh();
+        StartBatch(new List<Job> { j });
+    }
+
+    void AddInspectRow(string path)
+    {
+        Job existing = jobs.Find(delegate(Job x) { return string.Equals(x.Src, path, StringComparison.OrdinalIgnoreCase); });
+        if (existing != null) { existing.Row.Expand(); return; }
+        var j = new Job { Src = path, State = State.Idle };
+        j.Row = new RowView(j, w);
+        j.Row.CleanRequested += OnCleanRequested;
+        rows.Children.Add(j.Row.Card);
+        j.Row.In(0);
+        jobs.Add(j);
+        j.Row.SetState(State.Idle);
+        Refresh();
+        scroll.ScrollToBottom();
+        j.Row.Expand();
+    }
+
+    void StartBatch(List<Job> batch)
+    {
         // With the animation on, each file takes at least a moment (about 3.5 s per batch in total) so the cleaning can be seen.
         int minMs = Opts.Anim ? Math.Max(250, Math.Min(1800, 3600 / batch.Count)) : 0;
 
@@ -1584,7 +1695,6 @@ class MainWin
             }
         });
     }
-
     void ClearList()
     {
         if (busy || jobs.Count == 0) return;
@@ -1612,6 +1722,7 @@ class MainWin
                 case State.Done: ok++; break;
                 case State.Warn: warn++; break;
                 case State.Error: err++; break;
+                case State.Idle: break;
                 default: pend++; break;
             }
         }
@@ -1630,7 +1741,8 @@ class MainWin
         if (nowBusy)
         {
             int done = ok + warn + err;
-            text = "cleaning " + Math.Min(done + 1, total) + " of " + total;
+            int active = ok + warn + err + pend;
+            text = "cleaning " + Math.Min(done + 1, active) + " of " + active;
             led = "#D4FF4A"; pulse = true; glow = .7;
         }
         else if (total == 0) { text = "ready"; led = "#3C3C46"; }
@@ -1640,8 +1752,8 @@ class MainWin
             if (ok > 0) parts.Add(ok + " clean");
             if (warn > 0) parts.Add(warn + " to review");
             if (err > 0) parts.Add(err + (err == 1 ? " error" : " errors"));
-            text = string.Join(" · ", parts.ToArray());
-            led = err > 0 ? "#FF5F56" : (warn > 0 ? "#FFB454" : "#3DDC97"); glow = .6;
+            text = parts.Count == 0 ? "ready" : string.Join(" · ", parts.ToArray());
+            led = parts.Count == 0 ? "#3C3C46" : (err > 0 ? "#FF5F56" : (warn > 0 ? "#FFB454" : "#3DDC97")); glow = parts.Count == 0 ? 0 : .6;
         }
         if (statusText.Text != text) A.Swap(statusText, statusT, text);
         if (nowBusy) sceneText.Text = text;
@@ -1726,7 +1838,6 @@ class MainWin
     PixelStage mainStage;
     FrameworkElement zoneContent, sceneHost;
     TextBlock sceneText;
-    InspectorPanel inspector;
     double segW;
 
     void InitOptions()
@@ -1872,7 +1983,6 @@ class MainWin
         zoneContent = G<FrameworkElement>("ZoneContent"); sceneHost = G<FrameworkElement>("SceneHost"); sceneText = G<TextBlock>("SceneText");
         mainStage = new PixelStage();
         G<ContentControl>("StageHost").Content = mainStage;
-        inspector = new InspectorPanel(w, (Panel)root, G<UIElement>("Toast"), delegate(string f) { AddPaths(new[] { f }); });
 
         G<Button>("InspectPick").Click += delegate { PickInspect(); };
         // the animation switch lives in the Options panel
@@ -1910,13 +2020,7 @@ class MainWin
         var d = new OpenFileDialog();
         d.Title = "Choose a file to inspect";
         d.Filter = "Videos and photos|*.mp4;*.mov;*.m4v;*.3gp;*.jpg;*.jpeg;*.png;*.webp;*.heic;*.heif;*.tif;*.tiff;*.gif|All files|*.*";
-        if (d.ShowDialog(w) == true) inspector.Open(d.FileName, null);
-    }
-
-    void OnInspect(Job j)
-    {
-        if (j.State == State.Working) return;
-        inspector.Open(j.Src, (j.State == State.Done || j.State == State.Warn) && j.Out != null && !j.Replaced ? j.Out : null);
+        if (d.ShowDialog(w) == true) AddInspectRow(d.FileName);
     }
 
     // while files are being cleaned the drop zone turns into the brush-and-document scene

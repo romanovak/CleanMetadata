@@ -54,7 +54,9 @@ Heads-up for photos and videos: removing dates writes empty date fields, which i
 
 ## Inspect a file
 
-Drop a file on the **Inspect** area (right half), click **Choose file** there, or click the magnifier on any row, to see what metadata a file carries before you clean it. ExifTool reads it and the tags are grouped by the same categories as the Options switches (location, device and camera, dates, author and rights, thumbnails, edit history and software, C2PA, other). For a file you have already cleaned, every tag is marked as removed or kept, so you can check the result tag by tag.
+Drop a file on the **Inspect** area (right half), click **Choose file** there, or click the magnifier on any row, to see what metadata a file carries before you clean it. ExifTool reads it and the tags are grouped by the same categories as the Options switches (location, device and camera, dates, author and rights, thumbnails, edit history and software, C2PA, other). For a file you have already cleaned, every tag is marked as removed or kept, so you can check the result tag by tag. The inspector opens inside the file list, right under the file's row, with no separate panel.
+
+Files that have not been cleaned show two buttons: **Clean this file** (uses the current Options) and **Custom**, which lists only the categories that file really has, each with a switch, plus *Everything else*. Pick what to remove and press **Clean selected**; that choice applies to that file only and does not change your Options.
 
 ## Cleaning animation
 

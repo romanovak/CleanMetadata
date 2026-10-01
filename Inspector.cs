@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -145,49 +146,42 @@ class Ticker : TextBlock
     public double Value { get { return (double)GetValue(ValueProperty); } set { SetValue(ValueProperty, value); } }
 }
 
-// ---------- panel ----------
+// ---------- inline view ----------
 
-// Slide-over panel: a magnifier scans a pixel-art document while ExifTool reads the file, then the tags are listed by
-// category. When a cleaned copy exists, every tag is marked as removed or kept.
-class InspectorPanel
+// The inspector, shown inside a row of the file list instead of in a separate panel: a magnifier scans a pixel-art
+// document while ExifTool reads the file, then the tags are listed by category. When a cleaned copy exists, every tag
+// is marked as removed or kept. For a file that has not been cleaned it offers "Clean this file" (current Options) and
+// "Custom", which lists only the categories the file actually has so you can pick what to remove.
+class InspectView
 {
     const string Xaml = @"
-<Grid xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' Visibility='Collapsed'>
-  <Border x:Name='Scrim' Background='#B3000000' Opacity='0'/>
-  <Border x:Name='Box' HorizontalAlignment='Right' Width='430' Background='#F7101013' BorderBrush='#2E2E36' BorderThickness='1,0,0,0'>
-    <Border.RenderTransform><TranslateTransform x:Name='BoxT' X='430'/></Border.RenderTransform>
-    <Border.Effect><DropShadowEffect Color='#000000' BlurRadius='30' ShadowDepth='0' Opacity='.6'/></Border.Effect>
+<StackPanel xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
+  <Border x:Name='StageBox' Height='150' CornerRadius='12' Background='#0E0E11' BorderBrush='#232329' BorderThickness='1' Margin='0,0,0,12'>
     <Grid>
-      <Grid.RowDefinitions><RowDefinition Height='56'/><RowDefinition Height='*'/><RowDefinition Height='Auto'/></Grid.RowDefinitions>
-      <Grid Margin='20,0,10,0'>
-        <StackPanel VerticalAlignment='Center' Margin='0,0,44,0'>
-          <TextBlock Text='Inspector' FontSize='16' FontWeight='SemiBold'/>
-          <TextBlock x:Name='Sub' FontFamily='Cascadia Mono, Consolas' FontSize='11' Foreground='#74747F' TextTrimming='CharacterEllipsis'/>
-        </StackPanel>
-        <Button x:Name='CloseBtn' HorizontalAlignment='Right' VerticalAlignment='Center'/>
-      </Grid>
-      <ScrollViewer Grid.Row='1' VerticalScrollBarVisibility='Auto' HorizontalScrollBarVisibility='Disabled' Focusable='False'>
-        <StackPanel Margin='20,4,14,20'>
-          <Border x:Name='StageBox' Height='158' CornerRadius='14' Background='#0E0E11' BorderBrush='#232329' BorderThickness='1' Margin='0,0,0,16'>
-            <Grid>
-              <ContentControl x:Name='StageHost' Width='224' Height='132' HorizontalAlignment='Center' VerticalAlignment='Top' Margin='0,8,0,0'/>
-              <TextBlock x:Name='StageText' Text='reading metadata...' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#74747F' HorizontalAlignment='Center' VerticalAlignment='Bottom' Margin='0,0,0,10'/>
-            </Grid>
-          </Border>
-          <StackPanel x:Name='Summary' Orientation='Horizontal' Margin='2,0,0,18' Visibility='Collapsed'/>
-          <TextBlock x:Name='ErrText' Visibility='Collapsed' Foreground='#FF5F56' FontFamily='Cascadia Mono, Consolas' FontSize='12' TextWrapping='Wrap'/>
-          <StackPanel x:Name='Cats'/>
-        </StackPanel>
-      </ScrollViewer>
-      <Border Grid.Row='2' BorderBrush='#232329' BorderThickness='0,1,0,0' Padding='20,12'>
-        <StackPanel Orientation='Horizontal' HorizontalAlignment='Right'>
-          <Button x:Name='RevealBtn' Content='Show clean copy' Visibility='Collapsed' Margin='0,0,8,0'/>
-          <Button x:Name='CleanBtn' Content='Clean this file' Visibility='Collapsed'/>
-        </StackPanel>
-      </Border>
+      <ContentControl x:Name='StageHost' Width='224' Height='132' HorizontalAlignment='Center' VerticalAlignment='Top' Margin='0,6,0,0'/>
+      <TextBlock x:Name='StageText' Text='reading metadata...' FontFamily='Cascadia Mono, Consolas' FontSize='11.5' Foreground='#74747F' HorizontalAlignment='Center' VerticalAlignment='Bottom' Margin='0,0,0,8'/>
     </Grid>
   </Border>
-</Grid>";
+  <StackPanel x:Name='Summary' Orientation='Horizontal' Margin='2,0,0,14' Visibility='Collapsed'/>
+  <TextBlock x:Name='ErrText' Visibility='Collapsed' Foreground='#FF5F56' FontFamily='Cascadia Mono, Consolas' FontSize='12' TextWrapping='Wrap'/>
+  <StackPanel x:Name='Actions' Orientation='Horizontal' Margin='0,0,0,12' Visibility='Collapsed'>
+    <Button x:Name='CleanBtn' Content='Clean this file'/>
+    <Button x:Name='CustomBtn' Content='Custom' Margin='8,0,0,0'/>
+    <Button x:Name='RevealBtn' Content='Show clean copy'/>
+  </StackPanel>
+  <Border x:Name='CustomBox' Visibility='Collapsed' CornerRadius='12' BorderThickness='1' BorderBrush='#2E2E36' Background='#EB0E0E11' Padding='14,12,14,12' Margin='0,0,0,12'>
+    <Border.LayoutTransform><ScaleTransform x:Name='CustomSc' ScaleY='0'/></Border.LayoutTransform>
+    <StackPanel>
+      <TextBlock Text='REMOVE ONLY' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F' Margin='0,0,0,12'/>
+      <StackPanel x:Name='CustomRows'/>
+      <StackPanel Orientation='Horizontal' HorizontalAlignment='Right' Margin='0,4,0,0'>
+        <Button x:Name='CancelBtn' Content='Cancel' Margin='0,0,8,0'/>
+        <Button x:Name='GoBtn' Content='Clean selected'/>
+      </StackPanel>
+    </StackPanel>
+  </Border>
+  <StackPanel x:Name='Cats'/>
+</StackPanel>";
 
     const string CardXaml = @"
 <Border xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
@@ -212,6 +206,16 @@ class InspectorPanel
   </StackPanel>
 </Border>";
 
+    const string SwitchRowXaml = @"
+<Grid xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' Margin='0,0,0,12'>
+  <Grid.ColumnDefinitions><ColumnDefinition Width='*'/><ColumnDefinition Width='Auto'/></Grid.ColumnDefinitions>
+  <StackPanel Margin='0,0,14,0'>
+    <TextBlock x:Name='T' FontSize='13' FontWeight='SemiBold'/>
+    <TextBlock x:Name='D' FontFamily='Cascadia Mono, Consolas' FontSize='10.5' Foreground='#74747F' TextWrapping='Wrap' Margin='0,3,0,0'/>
+  </StackPanel>
+  <ToggleButton x:Name='Sw' Grid.Column='1' VerticalAlignment='Top' Margin='0,1,0,0'/>
+</Grid>";
+
     static readonly Dictionary<string, string[]> Meta = new Dictionary<string, string[]>
     {
         { "location", new[] { "Location", "#6FF3FF" } }, { "device", new[] { "Device and camera", "#B69CFF" } },
@@ -221,70 +225,79 @@ class InspectorPanel
     };
 
     readonly Window w;
-    readonly Panel root;
-    readonly Action<string> cleanFile;
-    readonly FrameworkElement view, scrim, stageBox;
-    readonly TranslateTransform boxT;
-    readonly TextBlock sub, stageText, errText;
-    readonly Panel cats, summary;
-    readonly Button cleanBtn, revealBtn;
+    readonly Job job;
+    readonly Action<string[], bool> cleanRequest;
+    public readonly FrameworkElement Root;
+    readonly FrameworkElement stageBox, customBox;
+    readonly ScaleTransform customSc;
+    readonly TextBlock stageText, errText;
+    readonly Panel cats, summary, actions, customRows;
+    readonly Button cleanBtn, customBtn, revealBtn, goBtn, cancelBtn;
     readonly PixelStage stage = new PixelStage();
-    string src, cleanPath;
+    readonly List<ToggleButton> catSwitches = new List<ToggleButton>();
+    readonly List<string> catKeys = new List<string>();
+    ToggleButton restSwitch;
+    List<TagInfo> tags;
     int ticket;
-    public bool IsOpen { get; private set; }
+    bool loaded, customOpen;
+    public bool Stale;   // the file changed (it was cleaned): reload the next time the view is opened
 
-    public InspectorPanel(Window window, Panel rootGrid, UIElement before, Action<string> cleanRequest)
+    public InspectView(Window window, Job j, Action<string[], bool> request)
     {
-        w = window; root = rootGrid; cleanFile = cleanRequest;
-        view = (FrameworkElement)XamlReader.Parse(Xaml);
-        Grid.SetRow(view, 1); Grid.SetRowSpan(view, 2);
-        root.Children.Insert(root.Children.IndexOf(before), view);
-        scrim = (FrameworkElement)view.FindName("Scrim"); stageBox = (FrameworkElement)view.FindName("StageBox");
-        boxT = (TranslateTransform)view.FindName("BoxT");
-        sub = (TextBlock)view.FindName("Sub"); stageText = (TextBlock)view.FindName("StageText"); errText = (TextBlock)view.FindName("ErrText");
-        cats = (Panel)view.FindName("Cats"); summary = (Panel)view.FindName("Summary");
-        cleanBtn = (Button)view.FindName("CleanBtn"); revealBtn = (Button)view.FindName("RevealBtn");
-        ((ContentControl)view.FindName("StageHost")).Content = stage;
+        w = window; job = j; cleanRequest = request;
+        Root = (FrameworkElement)XamlReader.Parse(Xaml);
+        stageBox = (FrameworkElement)Root.FindName("StageBox"); customBox = (FrameworkElement)Root.FindName("CustomBox");
+        customSc = (ScaleTransform)Root.FindName("CustomSc");
+        stageText = (TextBlock)Root.FindName("StageText"); errText = (TextBlock)Root.FindName("ErrText");
+        cats = (Panel)Root.FindName("Cats"); summary = (Panel)Root.FindName("Summary");
+        actions = (Panel)Root.FindName("Actions"); customRows = (Panel)Root.FindName("CustomRows");
+        cleanBtn = (Button)Root.FindName("CleanBtn"); customBtn = (Button)Root.FindName("CustomBtn"); revealBtn = (Button)Root.FindName("RevealBtn");
+        goBtn = (Button)Root.FindName("GoBtn"); cancelBtn = (Button)Root.FindName("CancelBtn");
+        ((ContentControl)Root.FindName("StageHost")).Content = stage;
 
-        var close = (Button)view.FindName("CloseBtn");
-        close.Style = (Style)w.FindResource("Ico");
-        close.Content = new System.Windows.Shapes.Path { Data = (Geometry)w.FindResource("GCross"), Stroke = Br("#A9A9B3"), StrokeThickness = 1.8, Width = 12, Height = 12, Stretch = Stretch.Uniform, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
-        cleanBtn.Style = (Style)w.FindResource("BtnPrimary"); revealBtn.Style = (Style)w.FindResource("Btn");
-        close.Click += delegate { Close(); };
-        scrim.MouseLeftButtonUp += delegate { Close(); };
-        cleanBtn.Click += delegate { string f = src; Close(); if (f != null) cleanFile(f); };
-        revealBtn.Click += delegate { if (cleanPath != null && File.Exists(cleanPath)) Process.Start("explorer.exe", "/select,\"" + cleanPath + "\""); };
+        cleanBtn.Style = (Style)w.FindResource("BtnPrimary"); goBtn.Style = (Style)w.FindResource("BtnPrimary");
+        customBtn.Style = (Style)w.FindResource("Btn"); revealBtn.Style = (Style)w.FindResource("Btn"); cancelBtn.Style = (Style)w.FindResource("Btn");
+        cleanBtn.Click += delegate { cleanRequest(null, false); };
+        customBtn.Click += delegate { SetCustom(!customOpen); };
+        cancelBtn.Click += delegate { SetCustom(false); };
+        goBtn.Click += delegate
+        {
+            var keys = new List<string>();
+            for (int i = 0; i < catSwitches.Count; i++) if (catSwitches[i].IsChecked == true) keys.Add(catKeys[i]);
+            bool rest = restSwitch != null && restSwitch.IsChecked == true;
+            SetCustom(false);
+            cleanRequest(keys.ToArray(), rest);
+        };
+        revealBtn.Click += delegate
+        {
+            if (job.Out != null && File.Exists(job.Out)) Process.Start("explorer.exe", "/select,\"" + job.Out + "\"");
+        };
     }
 
     static Brush Br(string hex) { return new SolidColorBrush(A.C(hex)); }
 
-    public void Close()
+    public void EnsureLoaded() { if (!loaded || Stale) Load(); }
+
+    // the file is being cleaned: no actions until the result is back
+    public void CleaningStarted()
     {
-        if (!IsOpen) return;
-        IsOpen = false; ticket++;
-        stage.Stop(null);
-        A.To(scrim, UIElement.OpacityProperty, 0, 220);
-        A.To(boxT, TranslateTransform.XProperty, 430, 300, A.Out, 0, null, delegate { if (!IsOpen) view.Visibility = Visibility.Collapsed; });
+        Stale = true;
+        actions.Visibility = Visibility.Collapsed;
+        SetCustom(false);
     }
 
-    // cleaned = path of the cleaned copy if there is one (then tags are marked removed/kept)
-    public void Open(string file, string cleaned)
+    void Load()
     {
-        src = file; cleanPath = cleaned;
+        loaded = true; Stale = false;
         int my = ++ticket;
-        sub.Text = System.IO.Path.GetFileName(file); sub.ToolTip = file;
-        cats.Children.Clear(); summary.Children.Clear(); summary.Visibility = Visibility.Collapsed; errText.Visibility = Visibility.Collapsed;
-        cleanBtn.Visibility = Visibility.Collapsed; revealBtn.Visibility = Visibility.Collapsed;
-        stageBox.Visibility = Visibility.Visible; stageBox.Height = 158; stageBox.Opacity = 1; stageText.Text = "reading metadata...";
-        if (!IsOpen)
-        {
-            IsOpen = true;
-            view.Visibility = Visibility.Visible;
-            A.To(scrim, UIElement.OpacityProperty, 1, 250);
-            A.To(boxT, TranslateTransform.XProperty, 0, 500, A.Spring, 0, 430, null);
-        }
+        cats.Children.Clear(); summary.Children.Clear(); summary.Visibility = Visibility.Collapsed;
+        errText.Visibility = Visibility.Collapsed; actions.Visibility = Visibility.Collapsed;
+        SetCustom(false);
+        stageBox.Visibility = Visibility.Visible; stageBox.Height = 150; stageBox.Opacity = 1; stageText.Text = "reading metadata...";
         stage.Play(StageMode.Scan);
 
+        string src = job.Src;
+        string cleaned = (job.State == State.Done || job.State == State.Warn) && job.Out != null && !job.Replaced ? job.Out : null;
         bool anim = Opts.Anim;
         ThreadPool.QueueUserWorkItem(delegate
         {
@@ -292,7 +305,7 @@ class InspectorPanel
             List<TagInfo> orig = null; bool compared = false; string error = null;
             try
             {
-                orig = Inspector.Read(file);
+                orig = Inspector.Read(src);
                 if (cleaned != null && File.Exists(cleaned)) { Inspector.Compare(orig, Inspector.Read(cleaned)); compared = true; }
             }
             catch (Exception ex) { error = ex.Message; }
@@ -301,60 +314,120 @@ class InspectorPanel
         });
     }
 
-    void Show(List<TagInfo> tags, bool compared, string error)
+    void Show(List<TagInfo> found, bool compared, string error)
     {
         stage.Stop(null);
-        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Opts.Anim ? 420 : 1) };
         int my = ticket;
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Opts.Anim ? 420 : 1) };
         t.Tick += delegate
         {
             t.Stop();
             if (my != ticket) return;
             A.To(stageBox, UIElement.OpacityProperty, 0, 200);
             A.To(stageBox, FrameworkElement.HeightProperty, 0, 380, A.Out, 0, null, delegate { stageBox.Visibility = Visibility.Collapsed; });
-            if (error != null)
-            {
-                errText.Text = error; errText.Visibility = Visibility.Visible;
-                return;
-            }
-            Build(tags, compared);
+            if (error != null) { errText.Text = error; errText.Visibility = Visibility.Visible; ShowActions(false, false); return; }
+            Build(found, compared);
         };
         t.Start();
     }
 
-    void Build(List<TagInfo> tags, bool compared)
+    void ShowActions(bool compared, bool hasTags)
     {
-        int removed = 0; foreach (var x in tags) if (x.Removed) removed++;
-        summary.Visibility = Visibility.Visible;
-        if (compared) { AddStat(removed, "removed", "#FFB454", 0); AddStat(tags.Count - removed, "kept", "#3DDC97", 1); }
-        else AddStat(tags.Count, tags.Count == 1 ? "tag found" : "tags found", "#D4FF4A", 0);
-
-        cleanBtn.Visibility = !compared ? Visibility.Visible : Visibility.Collapsed;
+        bool canClean = job.State == State.Idle || job.State == State.Error;
+        cleanBtn.Visibility = canClean ? Visibility.Visible : Visibility.Collapsed;
+        customBtn.Visibility = canClean && hasTags ? Visibility.Visible : Visibility.Collapsed;
         revealBtn.Visibility = compared ? Visibility.Visible : Visibility.Collapsed;
+        actions.Visibility = canClean || compared ? Visibility.Visible : Visibility.Collapsed;
+    }
 
-        if (tags.Count == 0)
+    void Build(List<TagInfo> found, bool compared)
+    {
+        tags = found;
+        int removed = 0; foreach (var x in found) if (x.Removed) removed++;
+        summary.Visibility = Visibility.Visible;
+        if (compared) { AddStat(removed, "removed", "#FFB454", 0); AddStat(found.Count - removed, "kept", "#3DDC97", 1); }
+        else AddStat(found.Count, found.Count == 1 ? "tag found" : "tags found", "#D4FF4A", 0);
+
+        if (found.Count == 0)
         {
-            var none = new TextBlock { Text = "no metadata found", Foreground = Br("#74747F"), FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 12, Margin = new Thickness(2, 6, 0, 0) };
-            cats.Children.Add(none); return;
+            cats.Children.Add(new TextBlock { Text = "no metadata found", Foreground = Br("#74747F"), FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 12, Margin = new Thickness(2, 6, 0, 8) });
         }
-        int i = 0;
+        else
+        {
+            int i = 0;
+            foreach (string key in Inspector.DisplayOrder)
+            {
+                var list = found.FindAll(delegate(TagInfo x) { return x.Cat == key; });
+                if (list.Count == 0) continue;
+                AddCard(key, list, compared, i++);
+            }
+        }
+        BuildCustom();
+        ShowActions(compared, found.Count > 0);
+    }
+
+    // one switch per category the file really has, plus "everything else"
+    void BuildCustom()
+    {
+        customRows.Children.Clear(); catSwitches.Clear(); catKeys.Clear(); restSwitch = null;
         foreach (string key in Inspector.DisplayOrder)
         {
-            var list = tags.FindAll(delegate(TagInfo x) { return x.Cat == key; });
-            if (list.Count == 0) continue;
-            AddCard(key, list, compared, i++);
+            if (key == "other") continue;
+            int n = tags.FindAll(delegate(TagInfo x) { return x.Cat == key; }).Count;
+            if (n == 0) continue;
+            var sw = AddSwitchRow(Meta[key][0], n + (n == 1 ? " tag" : " tags"), true);
+            catSwitches.Add(sw); catKeys.Add(key);
         }
+        int others = tags.FindAll(delegate(TagInfo x) { return x.Cat == "other"; }).Count;
+        restSwitch = AddSwitchRow("Everything else", others + " other tags and anything not listed above (like the All preset)", false);
+        restSwitch.Click += delegate
+        {
+            bool all = restSwitch.IsChecked == true;
+            foreach (var s in catSwitches) { s.IsChecked = all ? true : s.IsChecked; s.IsEnabled = !all; }
+            UpdateGo();
+        };
+        foreach (var s in catSwitches) s.Click += delegate { UpdateGo(); };
+        UpdateGo();
+    }
+
+    ToggleButton AddSwitchRow(string title, string desc, bool on)
+    {
+        var row = (FrameworkElement)XamlReader.Parse(SwitchRowXaml);
+        ((TextBlock)row.FindName("T")).Text = title; ((TextBlock)row.FindName("D")).Text = desc;
+        var sw = (ToggleButton)row.FindName("Sw"); sw.Style = (Style)w.FindResource("Switch"); sw.IsChecked = on;
+        customRows.Children.Add(row);
+        return sw;
+    }
+
+    void UpdateGo()
+    {
+        bool any = restSwitch != null && restSwitch.IsChecked == true;
+        foreach (var s in catSwitches) if (s.IsChecked == true) any = true;
+        goBtn.IsEnabled = any;
+        A.To(goBtn, UIElement.OpacityProperty, any ? 1 : .4, 200);
+    }
+
+    void SetCustom(bool on)
+    {
+        if (on == customOpen) return;
+        customOpen = on;
+        if (on)
+        {
+            customBox.Visibility = Visibility.Visible;
+            A.To(customSc, ScaleTransform.ScaleYProperty, 1, 380, A.Out, 0, 0, null);
+            Root.Dispatcher.BeginInvoke(new Action(delegate { customBox.BringIntoView(); }), DispatcherPriority.Background);
+        }
+        else A.To(customSc, ScaleTransform.ScaleYProperty, 0, 220, A.Out, 0, null, delegate { if (!customOpen) customBox.Visibility = Visibility.Collapsed; });
     }
 
     void AddStat(int value, string label, string color, int index)
     {
         var sp = new StackPanel { Margin = new Thickness(0, 0, 28, 0), Opacity = 0 };
-        var n = new Ticker { FontSize = 30, FontWeight = FontWeights.SemiBold, Foreground = Br(color), Text = "0" };
+        var n = new Ticker { FontSize = 28, FontWeight = FontWeights.SemiBold, Foreground = Br(color), Text = "0" };
         sp.Children.Add(n);
         sp.Children.Add(new TextBlock { Text = label, FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 11.5, Foreground = Br("#74747F") });
         summary.Children.Add(sp);
         A.To(sp, UIElement.OpacityProperty, 1, 300, A.Out, 80 + index * 90, 0, null);
-        // count up
         var anim = new DoubleAnimation(0, value, TimeSpan.FromMilliseconds(Opts.Anim ? 700 : 1)) { EasingFunction = A.Out, BeginTime = TimeSpan.FromMilliseconds(80 + index * 90) };
         n.BeginAnimation(Ticker.ValueProperty, anim);
     }

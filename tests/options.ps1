@@ -1,4 +1,4 @@
-# Functional test of the Options model: loads the built exe by reflection, asks it for the ExifTool arguments of each
+﻿# Functional test of the Options model: loads the built exe by reflection, asks it for the ExifTool arguments of each
 # preset, runs ExifTool with them on a JPEG fixture and checks which tags survive.
 # Run it with Windows PowerShell 5.1 (the exe targets the .NET Framework):
 #   powershell -File .\tests\options.ps1 -ExifDir C:\path\to\exiftool-13.59_64 [-Exe .\dist\CleanMetadata.exe]
@@ -96,6 +96,15 @@ try {
     foreach ($o in $items) { $o.On = $false }
     Check ((Args $true).Count -eq 0) 'nothing selected: no arguments (the app reports an error instead of copying the file)'
 
+    # BuildFor: the "Custom" choice in the inspector
+    $bf = $optsT.GetMethod('BuildFor')
+    $one = @($bf.Invoke($null, @([string[]]@('c2pa'), $false, $true)))
+    $none = @($bf.Invoke($null, @([string[]]@(), $false, $true)))
+    $rest = @($bf.Invoke($null, @([string[]]@(), $true, $true)))
+    $c2 = $items | Where-Object { $_.Key -eq 'c2pa' }
+    Check (($one.Count -gt 0) -and (($one -join ' ') -eq (@($c2.Args) -join ' '))) 'BuildFor: only the selected category''s arguments'
+    Check ($none.Count -eq 0) 'BuildFor: no category, no arguments'
+    Check ($rest -contains '-all=') 'BuildFor: everything else uses -all='
     # C2PA flag
     SetPreset 'privacy'; Check (-not $optsT.GetMethod('WantsC2pa').Invoke($null, @())) 'privacy: C2PA check not requested'
     SetPreset 'all'; Check ($optsT.GetMethod('WantsC2pa').Invoke($null, @())) 'all: C2PA check requested'
